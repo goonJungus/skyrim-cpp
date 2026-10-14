@@ -107,4 +107,8 @@ if(SKYRIM_BUILD_TESTS)
   add_executable(texture_test tests/texture_test.cpp)
   target_link_libraries(texture_test PRIVATE skyrim_module)
   add_test(NAME texture COMMAND texture_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/dds_fixture)
+
+  add_executable(nif_test tests/nif_test.cpp)
+  target_link_libraries(nif_test PRIVATE skyrim_module)
+  add_test(NAME nif COMMAND nif_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/nif_fixture)
 endif()
