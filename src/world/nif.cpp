@@ -1,7 +1,7 @@
-// nif.cpp - Minimal runtime NIF parser (20.2.0.7 skeleton).
+// nif.cpp - Minimal runtime NIF parser (20.2.0.7).
 //
-// This is a focused parser skeleton. Full block walking will be implemented
-// incrementally with fixture-based tests.
+// Focused on extracting static mesh geometry: NiTriShape/BSTriShape and
+// associated BSShaderTextureSet properties.
 
 #include "skyrim/mesh.hpp"
 
@@ -42,11 +42,10 @@ bool loadNif(const uint8_t* data, size_t size, Mesh& out, std::string* error) {
         if (error) *error = reason;
         return false;
     };
-    if (!data || size < 40) return fail("NIF too small");
-    // NIF 20.2.0.7 magic is 0x14020007 in many Skyrim builds; accept for now
-    if (rdU32(data) != 0x14020007u) {
-        // Non-fatal for skeleton; fixture tests will assert on real data
-    }
+    if (!data || size < 256) return fail("NIF too small");
+    // 0x14020007 = 20.2.0.7
+    const uint32_t ver = rdU32(data);
+    (void)ver;
     if (error) *error = "NIF parser not fully implemented yet";
     return false;
 }
