@@ -8,8 +8,11 @@
 #include "skyrim/skyrim_module.hpp"
 #include "skyrim/form_database.hpp"
 #include "skyrim/string_table.hpp"
+#include "engine/engine.hpp"
 
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -22,11 +25,22 @@ void logLine(const char* msg) {
 }
 
 // Minimal arg parsing: --data <dir>  --plugin <file>  --types  --limit <n>
+// plus the playable mode: --play [--ws hex] [--grid X Y] [--radius N]
+//                             [--meshes <bsa>]... [--width N] [--height N]
 struct Args {
     std::string dataDir;
     std::vector<std::string> plugins;
+    std::vector<std::string> archives;
     bool listTypes = false;
+    bool play = false;
     uint64_t limit = 0;
+    uint32_t worldspace = 0x0000003C;
+    int gridX = 0;
+    int gridY = 0;
+    int radius = 1;
+    int width = 1280;
+    int height = 720;
+    int frames = 0;
 };
 
 Args parseArgs(int argc, char** argv) {
@@ -37,6 +51,23 @@ Args parseArgs(int argc, char** argv) {
             a.dataDir = argv[++i];
         } else if (k == "--plugin" && i + 1 < argc) {
             a.plugins.emplace_back(argv[++i]);
+        } else if (k == "--play") {
+            a.play = true;
+        } else if (k == "--meshes" && i + 1 < argc) {
+            a.archives.emplace_back(argv[++i]);
+        } else if (k == "--ws" && i + 1 < argc) {
+            a.worldspace = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 16));
+        } else if (k == "--grid" && i + 2 < argc) {
+            a.gridX = std::atoi(argv[++i]);
+            a.gridY = std::atoi(argv[++i]);
+        } else if (k == "--radius" && i + 1 < argc) {
+            a.radius = std::atoi(argv[++i]);
+        } else if (k == "--width" && i + 1 < argc) {
+            a.width = std::atoi(argv[++i]);
+        } else if (k == "--height" && i + 1 < argc) {
+            a.height = std::atoi(argv[++i]);
+        } else if (k == "--frames" && i + 1 < argc) {
+            a.frames = std::atoi(argv[++i]);
         } else if (k == "--types") {
             a.listTypes = true;
         } else if (k == "--limit" && i + 1 < argc) {
@@ -47,7 +78,15 @@ Args parseArgs(int argc, char** argv) {
                 "  --data <dir>     folder holding *.esm / *.esp / *.bsa\n"
                 "  --plugin <file>  load an extra plugin (repeatable)\n"
                 "  --types          print the record-type histogram\n"
-                "  --limit <n>      cap loaded records\n");
+                "  --limit <n>      cap loaded records\n"
+                "  --play           launch the windowed, playable world\n"
+                "  --ws <hex>       worldspace FormID for --play (default 3C = Tamriel)\n"
+                "  --grid <x> <y>   starting exterior cell for --play\n"
+                "  --radius <n>     cells streamed around the player (default 1)\n"
+                "  --meshes <bsa>   archive to load meshes/textures from (repeatable;\n"
+                "                   default: every *.bsa in the data folder)\n"
+                "  --width/--height window size for --play\n"
+                "  --frames <n>     render n frames then exit (smoke test)\n");
             std::exit(0);
         }
     }
@@ -68,6 +107,22 @@ int main(int argc, char** argv) {
             "  skyrim_standalone --data \"C:\\Games\\Skyrim\\Data\"\n"
             "The module reads YOUR OWN game files; nothing is bundled with it.\n");
         return 1;
+    }
+
+    // Playable mode: hand everything to the windowed engine and run it.
+    if (args.play) {
+        skyrim::host::EngineOptions engine;
+        engine.dataDir = args.dataDir;
+        engine.plugins = args.plugins;
+        engine.archives = args.archives;
+        engine.worldspace = args.worldspace;
+        engine.gridX = args.gridX;
+        engine.gridY = args.gridY;
+        engine.radius = args.radius;
+        engine.width = args.width;
+        engine.height = args.height;
+        engine.frames = args.frames;
+        return skyrim::host::runEngine(engine);
     }
 
     skyrim::SkyrimConfig config;

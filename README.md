@@ -12,10 +12,12 @@ is what makes the port reusable: the same library drops into a larger engine as
 a module (see `DIRECTIVE.md` for the integration contract). You do not build a
 "module"; you build the port, and the port serves as a module.
 
-It is early: today it reads the player's own game files and rebuilds the world
-data (records, cells, references, archives, strings), and is growing toward a
-playable world — meshes, textures, a player, and collision land next. There is
-no renderer in the tree yet.
+It is early but **playable**. Today it reads the player's own game files and
+rebuilds the world data (records, cells, references, archives, strings); turns
+cells into placed models through the record layer; loads and decodes the real
+meshes and textures from the game's archives; and renders a streamed,
+first-person view through a Direct3D 9 host — a walkable vertical slice of the
+world. Combat, AI, quests and the RPG systems are still ahead.
 
 Nothing derived from Bethesda's binaries or assets is committed here. The only
 binary files in the tree are **synthetic test fixtures we generate ourselves**
@@ -54,13 +56,18 @@ Targets produced:
 | Target | Kind | Purpose |
 |---|---|---|
 | `skyrim_module` | static library | the module itself |
-| `skyrim_standalone` | executable | the "Skyrim only" host shell (not part of the library) |
+| `skyrim_standalone` | executable | the "Skyrim only" host shell (not part of the library); `--play` runs the world |
 | `inflate_test` | test | DEFLATE decoder verification |
 | `bsa_test` | test | BSA archive reader verification |
 | `strings_test` | test | string-table reader verification |
 | `cell_test` | test | cell system verification |
+| `texture_test` | test | DDS texture decoder verification |
+| `nif_test` | test | NIF mesh-loader verification |
+| `world_render_test` | test | cell → placed-model → mesh pipeline verification |
 | `bsa_probe` | tool | list/decompress entries from a real `.bsa` |
 | `cell_demo` | tool | load real ESM masters and report cells and references |
+| `mesh_probe` | tool | parse meshes from a real `.bsa` (single or `--batch`) |
+| `world_probe` | tool | stream a real cell end to end: refs → models → meshes |
 
 At integration time a root `CMakeLists.txt` will `add_subdirectory()` this
 module. **Do not create one from here** — the integration AI owns it.
@@ -106,9 +113,52 @@ Or via the bundled host / tools:
 
 ```sh
 ./skyrim_standalone --data "C:\Games\Skyrim\Data" --plugin SomeMod.esp --types
+./skyrim_standalone --data "C:\Games\Skyrim\Data" --play --ws 3C --grid 4 -20
 ./cell_demo        "C:\Games\Skyrim\Data" Whiterun
 ./bsa_probe        "C:\Games\Skyrim\Data\Skyrim - Meshes.bsa"
+./world_probe      "C:\Games\Skyrim\Data" --ws 3C --grid 4 -20
 ```
+
+---
+
+## Playable world
+
+On Windows the host can run the world for real. Point it at your own install; it
+opens the archives, streams the exterior cells around the player, and renders
+through Direct3D 9:
+
+```sh
+./skyrim_standalone --data "C:\Games\Skyrim\Data" --play --ws 3C --grid 4 -20 --radius 1
+```
+
+| Input | Action |
+|---|---|
+| `W` `A` `S` `D` | move |
+| mouse | look |
+| `Shift` | run |
+| `Space` | jump (walk) / rise (fly) |
+| `Ctrl` | descend (fly) |
+| `F` | toggle walk / fly |
+
+`--ws` is the worldspace FormID (`3C` is Tamriel), `--grid X Y` the starting
+exterior cell, and `--radius N` how many cells stream around the player (a
+`(2N+1)²` grid). With no `--meshes`, every `*.bsa` in the data folder is searched
+for meshes and textures; pass `--meshes` to restrict it.
+
+Windowed mode is Windows-only because the renderer is Direct3D 9. Elsewhere the
+CLI still builds and explains that; the library it drives — parsing, cells,
+meshes, textures — compiles everywhere.
+
+A bounded run renders a few frames and exits, which is how the whole pipeline is
+smoke tested against a real install:
+
+```sh
+./skyrim_standalone --data "..." --play --ws 3C --grid 4 -20 --frames 3
+```
+
+That path exercises the real thing end to end: ~870k forms loaded, archives
+opened, ~1,000 instances streamed across nine cells, a real device created,
+meshes uploaded and textures decoded on the GPU, then a clean exit.
 
 ---
 
@@ -152,6 +202,41 @@ two handle models are unrelated and the integrator should write an adapter.
   every form by `FormID`. Provides record-type queries and a histogram.
 - `cell_system.{hpp,cpp}` — cell hierarchy and spatial index (see below).
 - `skyrim_world.cpp` — the concrete `ISkyrimWorld` and module factory.
+
+**Geometry / rendering layer** (`src/world/`, `include/skyrim/mesh.hpp`, `texture.hpp`)
+- `mesh.hpp` — the renderer-facing `Mesh`: interleaved vertex stream
+  (position, normal, UV), a shared 32-bit index buffer, and submeshes (index
+  range, diffuse texture path, alpha-test flag, fallback colour).
+- `nif.{hpp,cpp}` — the runtime **NIF loader**. Parses the Skyrim LE
+  generation (`20.2.0.7`) directly: the file banner + type list, `NiTriShape` /
+  `NiTriStrips` / `BSLODTriShape` geometry (positions, normals, UVs, strip
+  de-triangulation), diffuse-texture resolution through
+  `BSLightingShaderProperty` → `BSShaderTextureSet`, `NiAlphaProperty` cutout
+  detection, and LOD duplicate suppression by name **and** bounding-box
+  containment. Validated against `Skyrim - Meshes.bsa`: **1,477 of 1,500**
+  sampled meshes parse, and every miss matches the reference converter (empty
+  skeletons and corrupt strip counts are legitimately blank). One mesh,
+  `WRHouseBlackSmith01.nif`, matches the reference byte-for-byte — **13,329
+  verts / 9,524 tris / 12 texture groups**.
+- `texture.{hpp,cpp}` — DDS decoder: BC1/BC2/BC3 block compression plus
+  uncompressed BGRA8/BGRX8, with the DX10 extended header recognised. Decodes
+  the top mip to tightly packed RGBA8.
+- `world_render.{hpp,cpp}` — the bridge from world structure to drawables:
+  `ModelResolver` (base `FormID` → `MODL` model path), `instancesForCell`
+  (the placed models for a cell, with position/rotation/scale), and `MeshCache`
+  (loads and caches meshes out of the BSA archives).
+
+**Playable host** (`host/`, renderer is Windows-only)
+- `host/engine/` — the Win32 window and the Direct3D 9 renderer (fixed-function
+  lighting, per-submesh textures, alpha-cutout, GPU mesh and texture caches), a
+  first-person player with gravity and axis-aligned collision, and cell
+  streaming around the player.
+- `host/main.cpp` — the thin CLI (`--play`, `--ws`, `--grid`, `--radius`,
+  `--meshes`, `--frames`).
+
+Verified end to end on a real install: Helgen Exterior (`Tamriel` `0x3C`, cell
+`4,-20`) streams **1,080 instances across nine cells**, all uploaded and
+rendered on a real device.
 
 ### Not yet implemented
 
@@ -356,13 +441,21 @@ the file's TES4 `MAST` list to remap).
 - `make_cell_fixture.py` — a synthetic ESM for the cell system: a compressed
   cell, two worldspaces sharing grid `(0,0)`, a persistent cell colliding with a
   real cell, interior cells, and `REFR`/`ACHR` references.
+- `make_dds_fixture.py` — synthetic DDS images: DXT1/DXT3/DXT5, uncompressed
+  BGRA8, a DX10-header image, and a truncated/bad-magic pair.
+- `make_nif_fixture.py` — a synthetic NIF written with the **realistic 39-byte
+  banner** (so the loader is exercised against the shape real files have, not
+  the naive header the spec implies), plus bad-magic and truncated cases.
+- `make_worldrender_fixture.py` — a synthetic ESM for the pipeline: a placed
+  `REFR` → `MODL` path → mesh, resolved end to end.
 - `probe_esm.py` — an independent Python walker used to cross-check the C++
   reader against ground truth (top-level groups, record counts, compressed
   cells, duplicate coordinates, editor-id search).
 - `trace_esm.py` — walks a generated ESM the same way the reader does; used to
   localise walker bugs.
-- `inflate_test.cpp`, `bsa_test.cpp`, `strings_test.cpp`, `cell_test.cpp` —
-  the CTest targets.
+- `inflate_test.cpp`, `bsa_test.cpp`, `strings_test.cpp`, `cell_test.cpp`,
+  `texture_test.cpp`, `nif_test.cpp`, `world_render_test.cpp` — the CTest
+  targets.
 
 Run with `ctest --test-dir build -C Release`.
 

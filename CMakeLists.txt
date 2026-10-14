@@ -66,6 +66,20 @@ set_target_properties(skyrim_module PROPERTIES
 add_executable(skyrim_standalone host/main.cpp)
 target_link_libraries(skyrim_standalone PRIVATE skyrim_module)
 
+# The playable mode (--play) renders through Direct3D 9 and therefore only
+# builds on Windows. Everywhere else the CLI still builds and explains that
+# the renderer is unavailable; the library itself is unaffected.
+if(WIN32)
+  target_sources(skyrim_standalone PRIVATE
+    host/engine/d3d9_renderer.cpp
+    host/engine/game.cpp
+    host/engine/engine.cpp
+  )
+  target_link_libraries(skyrim_standalone PRIVATE d3d9)
+else()
+  target_sources(skyrim_standalone PRIVATE host/engine/engine_stub.cpp)
+endif()
+
 if(MSVC)
   target_compile_options(skyrim_standalone PRIVATE /W4 /permissive-)
 else()
