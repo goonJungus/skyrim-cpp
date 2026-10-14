@@ -29,6 +29,7 @@ add_library(skyrim_module STATIC
   src/world/string_table.cpp
   src/world/cell_system.cpp
   src/world/texture.cpp
+  src/world/nif.cpp
   src/world/skyrim_world.cpp
 )
 
