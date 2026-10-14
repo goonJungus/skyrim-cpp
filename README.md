@@ -1,12 +1,21 @@
-# Skyrim Engine Module
+# Skyrim C++
 
-A from-scratch reimplementation of the TES V: Skyrim (2011) game logic and data
-layer, packaged as a **C++20 static library** for integration into
-"The Elder Scrolls: San Andreas".
+A from-scratch **port of The Elder Scrolls V: Skyrim (2011)** — a native engine
+built up record by record and system by system against the real game data, not
+copied from it. The goal is a playable Skyrim, on 64-bit Windows / macOS /
+Linux, from the player's own installation.
 
-This module is **not** a game. It has no `main()`, no renderer, no window and no
-audio device. It reads the player's own game files and exposes the game's
-simulation and record layer through interfaces.
+**Port first, module second.** The project is split into a portable C++20
+**library** (`skyrim_module`) that holds the engine, and a thin **host**
+(`skyrim_standalone`) that drives it — no `main()` in the library. That split
+is what makes the port reusable: the same library drops into a larger engine as
+a module (see `DIRECTIVE.md` for the integration contract). You do not build a
+"module"; you build the port, and the port serves as a module.
+
+It is early: today it reads the player's own game files and rebuilds the world
+data (records, cells, references, archives, strings), and is growing toward a
+playable world — meshes, textures, a player, and collision land next. There is
+no renderer in the tree yet.
 
 Nothing derived from Bethesda's binaries or assets is committed here. The only
 binary files in the tree are **synthetic test fixtures we generate ourselves**
