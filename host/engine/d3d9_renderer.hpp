@@ -1,8 +1,8 @@
 // d3d9_renderer.hpp - Win32 window + Direct3D 9 device, GPU caches, drawing.
 //
 // This is the only place in the project that knows about a graphics API. It
-// lives in the host, not the library, so the module stays renderer-free and can
-// be reused by the integration host with a different backend.
+// lives in the host, not the library, so the library stays renderer-free and can
+// be reused with a different backend.
 //
 // The renderer speaks in library types (skyrim::Mesh, skyrim::Image): it uploads
 // them once, keyed by model/texture path, and draws them with a caller-supplied

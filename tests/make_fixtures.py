@@ -10,9 +10,12 @@ Covers the three DEFLATE block types we can provoke:
   dynamic  - default level on text-like input (the common Skyrim case)
 """
 import os
+import sys
 import zlib
 
-OUT = os.path.join(os.path.dirname(__file__), "data")
+# Where to write: argv[1] when given (the build tree, via CMake), else a local
+# data/ folder next to this script.
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(OUT, exist_ok=True)
 
 

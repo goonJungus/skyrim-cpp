@@ -1,13 +1,13 @@
 // skyrim_module.hpp - Primary master header & initialization API.
 //
-// PUBLIC API of the Skyrim engine module. This is the only header the
-// integrator needs to include to drive a Skyrim world.
+// PUBLIC API of the portable library. This is the only header a host needs to
+// include to drive a Skyrim world.
 //
-// Design rules (see DIRECTIVE.md):
-//   * No main(). The module is a library; a host links it and drives
+// Design rules:
+//   * No main(). The library is a static library; a host links it and drives
 //     ISkyrimWorld::init/update/shutdown.
 //   * No game assets in the source tree. Everything is read at runtime from
-//     the user's own installation, located via SkyrimConfig::dataDirectory.
+//     the player's own installation, located via SkyrimConfig::dataDirectory.
 //   * Cross-platform (Windows/macOS/Linux), 64-bit, C++20, no compiler
 //     extensions. Standard library only.
 

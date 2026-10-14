@@ -1,14 +1,14 @@
-// main.cpp - skyrim_standalone: the "Skyrim only" host.
+// main.cpp - skyrim_standalone: the playable program.
 //
-// Deliberately thin. It owns no simulation and no rendering; it resolves where
-// the user's game files live, drives the library's lifecycle, and prints what
-// the module loaded. The same shell pattern is used by the integration AI's
-// combined host, with a different world implementation behind it.
+// Deliberately thin. It resolves where the player's game files live, then either
+// prints what the library loaded or hands control to the windowed engine. The
+// simulation, rendering and collision all live in the library and host/engine/.
 
 #include "skyrim/skyrim_module.hpp"
 #include "skyrim/form_database.hpp"
 #include "skyrim/string_table.hpp"
 #include "engine/engine.hpp"
+#include "engine/install.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -47,7 +47,7 @@ Args parseArgs(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; i++) {
         const std::string k = argv[i];
-        if ((k == "--data" || k == "-d") && i + 1 < argc) {
+        if ((k == "--data" || k == "-d" || k == "--game" || k == "-g") && i + 1 < argc) {
             a.dataDir = argv[++i];
         } else if (k == "--plugin" && i + 1 < argc) {
             a.plugins.emplace_back(argv[++i]);
@@ -74,8 +74,10 @@ Args parseArgs(int argc, char** argv) {
             a.limit = std::strtoull(argv[++i], nullptr, 10);
         } else if (k == "--help" || k == "-h") {
             std::printf(
-                "usage: skyrim_standalone --data <DataFolder> [options]\n"
+                "usage: skyrim_standalone [--data <DataFolder>] [options]\n"
                 "  --data <dir>     folder holding *.esm / *.esp / *.bsa\n"
+                "                   (also --game; if omitted, the install is\n"
+                "                    located automatically and remembered)\n"
                 "  --plugin <file>  load an extra plugin (repeatable)\n"
                 "  --types          print the record-type histogram\n"
                 "  --limit <n>      cap loaded records\n"
@@ -101,18 +103,32 @@ int main(int argc, char** argv) {
     const skyrim::ModuleVersion v = skyrim::moduleVersion();
     std::printf("skyrim_standalone  (skyrim_module %u.%u.%u)\n", v.major, v.minor, v.patch);
 
-    if (args.dataDir.empty()) {
+    // Resolve the player's own game folder. A --data path wins; otherwise the
+    // saved setting, the environment, the program folder, Steam, then a folder
+    // picker are tried in turn.
+    const bool explicitDir = !args.dataDir.empty();
+    std::string dataDir = args.dataDir;
+    {
+        const skyrim::host::LocatedInstall install = skyrim::host::locateSkyrimData(dataDir, true);
+        if (install.ok) {
+            dataDir = install.dataDir;
+            std::printf("Skyrim data: %s  (%s)\n", install.dataDir.c_str(), install.source.c_str());
+            if (!explicitDir) skyrim::host::saveInstallPreference(install.dataDir);
+        }
+    }
+    if (dataDir.empty()) {
         std::printf(
-            "\nNo data folder given. This host never guesses an install path:\n"
-            "  skyrim_standalone --data \"C:\\Games\\Skyrim\\Data\"\n"
-            "The module reads YOUR OWN game files; nothing is bundled with it.\n");
+            "\nCould not find a Skyrim install. Point the program at it once:\n"
+            "  skyrim_standalone --data \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Skyrim\\Data\"\n"
+            "or set SKYRIM_DIR to your Skyrim folder.\n"
+            "The program reads YOUR OWN game files; nothing is bundled with it.\n");
         return 1;
     }
 
     // Playable mode: hand everything to the windowed engine and run it.
     if (args.play) {
         skyrim::host::EngineOptions engine;
-        engine.dataDir = args.dataDir;
+        engine.dataDir = dataDir;
         engine.plugins = args.plugins;
         engine.archives = args.archives;
         engine.worldspace = args.worldspace;
@@ -126,9 +142,9 @@ int main(int argc, char** argv) {
     }
 
     skyrim::SkyrimConfig config;
-    config.dataDirectory  = args.dataDir;
+    config.dataDirectory  = dataDir;
     config.plugins        = args.plugins;
-    config.loadArchives   = false;   // archive reader not landed yet
+    config.loadArchives   = false;   // archive reader not wired into the world yet
     config.maxRecords     = args.limit;
     config.logSink        = &logLine;
 
