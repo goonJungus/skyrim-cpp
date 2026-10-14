@@ -302,10 +302,11 @@ int Game::run() {
 
         // Mouse look: measure the cursor's offset from the window centre and
         // re-centre it, which needs no raw-input plumbing and works windowed.
-        // Skipped in bounded runs so an automated smoke test never moves the
-        // pointer.
+        // Only while the window is foreground, so it never fights the pointer
+        // when the player alt-tabs away; and skipped entirely in bounded runs.
         POINT pt;
-        if (m_opt.maxFrames <= 0 && GetCursorPos(&pt) != 0) {
+        if (m_opt.maxFrames <= 0 && GetForegroundWindow() == m_renderer.hwnd() &&
+            GetCursorPos(&pt) != 0) {
             RECT rc;
             GetClientRect(m_renderer.hwnd(), &rc);
             POINT tl{rc.left, rc.top};
@@ -327,6 +328,8 @@ int Game::run() {
             std::printf("skyrim: %s\n", m_player.flying ? "fly mode" : "walk mode");
         }
         m_prevF = f;
+
+        if (keyDown(VK_ESCAPE)) break;   // quit
 
         updatePlayer(dt);
 
