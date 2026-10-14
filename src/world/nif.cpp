@@ -57,6 +57,24 @@ float f32(const uint8_t* d, size_t p) {
     return f;
 }
 
+// A NIF opens with a printable banner, not a magic word: the fixed header
+// fields sit at offsets that only the banner's length pins down. The numeric
+// version follows the banner's newline. Accept only the Skyrim generation
+// (20.2.0.7) that this parser understands.
+bool bannerSupported(const uint8_t* d, size_t size) {
+    static const char kGamebryo[] = "Gamebryo File Format";
+    static const char kNetImmerse[] = "NetImmerse File Format";
+    const size_t gb = sizeof(kGamebryo) - 1;
+    const size_t ni = sizeof(kNetImmerse) - 1;
+    const bool gamebryo = size >= gb && std::memcmp(d, kGamebryo, gb) == 0;
+    const bool netimmerse = size >= ni && std::memcmp(d, kNetImmerse, ni) == 0;
+    if (!gamebryo && !netimmerse) return false;
+    for (size_t i = 0; i + 4 <= size && i < 64; i++) {
+        if (d[i] == '\n') return u32(d, i + 1) == 0x14020007u;
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Header
 // ---------------------------------------------------------------------------
@@ -457,7 +475,35 @@ struct ShapePlan {
     bool include = false;
     std::string name;
     GeomData geom;
+    // Axis-aligned bounds of the parsed vertices, used to prove an LOD shape
+    // duplicates a full-detail one.
+    bool hasBbox = false;
+    float bmin[3] = {0.0f, 0.0f, 0.0f};
+    float bmax[3] = {0.0f, 0.0f, 0.0f};
 };
+
+void computeBbox(ShapePlan& s) {
+    if (s.geom.verts.empty()) return;
+    s.hasBbox = true;
+    s.bmin[0] = s.bmin[1] = s.bmin[2] = 1e30f;
+    s.bmax[0] = s.bmax[1] = s.bmax[2] = -1e30f;
+    for (const Vertex& v : s.geom.verts) {
+        const float p[3] = {v.x, v.y, v.z};
+        for (int i = 0; i < 3; i++) {
+            s.bmin[i] = std::min(s.bmin[i], p[i]);
+            s.bmax[i] = std::max(s.bmax[i], p[i]);
+        }
+    }
+}
+
+bool bboxContains(const ShapePlan& outer, const ShapePlan& inner, float eps) {
+    return inner.bmin[0] >= outer.bmin[0] - eps &&
+           inner.bmin[1] >= outer.bmin[1] - eps &&
+           inner.bmin[2] >= outer.bmin[2] - eps &&
+           inner.bmax[0] <= outer.bmax[0] + eps &&
+           inner.bmax[1] <= outer.bmax[1] + eps &&
+           inner.bmax[2] <= outer.bmax[2] + eps;
+}
 
 bool isShapeType(const std::string& t) {
     return t == "NiTriShape" || t == "NiTriStrips" || t == "BSLODTriShape";
@@ -484,9 +530,8 @@ bool loadNif(const uint8_t* data, size_t size, Mesh& out, std::string* error) {
     };
 
     if (!data || size < 0x40) return fail("NIF too small");
-    if (u32(data, 0) != 0x14020007u) {
-        // The magic doubles as the version; accept 20.2.0.7 only for now.
-        return fail("unsupported NIF version");
+    if (!bannerSupported(data, size)) {
+        return fail("unsupported or unrecognised NIF header");
     }
 
     Nif nif;
@@ -507,26 +552,39 @@ bool loadNif(const uint8_t* data, size_t size, Mesh& out, std::string* error) {
         }
         if (sp.dataBi < nif.blockCount() && parseGeomData(nif, sp.dataBi, sp.geom)) {
             sp.include = true;
+            computeBbox(sp);
         }
         plan.push_back(std::move(sp));
     }
 
-    // LOD duplicate suppression: drop a BSLODTriShape only when a same-named
-    // full-detail shape exists (bias toward keeping unique geometry).
-    for (const ShapePlan& s : plan) {
-        if (!s.include || !s.isLod) continue;
-    }
+    // LOD duplicate suppression. A BSLODTriShape is dropped only when it is a
+    // proven duplicate of an included full-detail shape -- by name reference
+    // ("X:N - L1_X:N" points at "X:N") or by bounding-box containment. Anything
+    // else is unique geometry and is kept: a kept duplicate can only z-fight,
+    // but a dropped unique shape is a hole.
     {
-        std::vector<std::string> fullNames;
+        std::vector<const ShapePlan*> full;
         for (const ShapePlan& s : plan)
-            if (s.include && !s.isLod) fullNames.push_back(s.name);
+            if (s.include && !s.isLod && !s.geom.tris.empty()) full.push_back(&s);
         for (ShapePlan& s : plan) {
             if (!s.include || !s.isLod) continue;
-            const size_t dash = s.name.find(" - ");
-            const std::string base = (dash == std::string::npos) ? s.name : s.name.substr(0, dash);
-            for (const std::string& fn : fullNames) {
-                if (!base.empty() && base == fn) { s.include = false; break; }
+            bool dup = false;
+            std::string base = s.name;
+            const size_t dash = base.find(" - ");
+            if (dash != std::string::npos) base = base.substr(0, dash);
+            while (!base.empty() && (base.back() == ' ' || base.back() == '\t')) base.pop_back();
+            for (const ShapePlan* f : full) {
+                if (!base.empty() && base == f->name) { dup = true; break; }
+                if (s.hasBbox && f->hasBbox) {
+                    const float dx = f->bmax[0] - f->bmin[0];
+                    const float dy = f->bmax[1] - f->bmin[1];
+                    const float dz = f->bmax[2] - f->bmin[2];
+                    const float diag = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    const float eps = std::max(1.0f, 0.02f * diag);
+                    if (bboxContains(*f, s, eps)) { dup = true; break; }
+                }
             }
+            if (dup) s.include = false;
         }
     }
 

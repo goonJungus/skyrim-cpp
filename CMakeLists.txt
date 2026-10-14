@@ -81,6 +81,8 @@ if(SKYRIM_BUILD_TOOLS)
   target_link_libraries(bsa_probe PRIVATE skyrim_module)
   add_executable(cell_demo tools/cell_demo.cpp)
   target_link_libraries(cell_demo PRIVATE skyrim_module)
+  add_executable(mesh_probe tools/mesh_probe.cpp)
+  target_link_libraries(mesh_probe PRIVATE skyrim_module)
 endif()
 
 option(SKYRIM_BUILD_TESTS "Build the module's unit tests" ON)

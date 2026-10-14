@@ -19,6 +19,7 @@ import struct
 import sys
 
 VERSION = 0x14020007
+BANNER = b"Gamebryo File Format, Version 20.2.0.7\n"  # 39 bytes
 
 TYPES = ["NiTriShape", "NiTriShapeData", "BSLightingShaderProperty",
          "BSShaderTextureSet", "NiAlphaProperty"]
@@ -78,10 +79,14 @@ def build_texset_block():
 
 def build_header(block_sizes):
     b = bytearray()
-    b += struct.pack('<I', VERSION)
-    b += b'\x00' * 44                        # filler through offset 0x30
-    b += struct.pack('<I', len(block_sizes))  # num blocks, at offset 0x30
-    # type list begins at offset 52
+    b += BANNER                              # 0..38
+    b += struct.pack('<I', VERSION)          # 39..42 numeric version
+    b += bytes([1])                          # 43 endianness
+    b += struct.pack('<I', 12)               # 44..47 user version
+    b += struct.pack('<I', len(block_sizes))  # 48 num blocks (fixed offset 0x30)
+    b += b'\x00' * 34                        # 52..85 header padding
+    assert len(b) == 86
+    # type list begins at offset 86, as in real Skyrim meshes
     b += struct.pack('<H', len(TYPES))
     for t in TYPES:
         e = t.encode('ascii')
