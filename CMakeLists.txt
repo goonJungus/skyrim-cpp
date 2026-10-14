@@ -28,6 +28,7 @@ add_library(skyrim_module STATIC
   src/world/form_database.cpp
   src/world/string_table.cpp
   src/world/cell_system.cpp
+  src/world/texture.cpp
   src/world/skyrim_world.cpp
 )
 
@@ -101,4 +102,8 @@ if(SKYRIM_BUILD_TESTS)
   add_executable(cell_test tests/cell_test.cpp)
   target_link_libraries(cell_test PRIVATE skyrim_module)
   add_test(NAME cell COMMAND cell_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/cell_fixture)
+
+  add_executable(texture_test tests/texture_test.cpp)
+  target_link_libraries(texture_test PRIVATE skyrim_module)
+  add_test(NAME texture COMMAND texture_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/dds_fixture)
 endif()
