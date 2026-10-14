@@ -1,0 +1,25 @@
+{
+ "104": {
+  "meshes\\plain.nif": 64,
+  "meshes\\zipped.nif": 2048,
+  "meshes\\empty.nif": 0,
+  "textures\\d.dds": 5000,
+  "textures\\big.dds": 40000,
+  "strings\\strings0.strings": 9000,
+  "meshes\\architecture\\whiterun\\deep.nif": 1234
+ },
+ "105": {
+  "meshes\\plain.nif": 64,
+  "meshes\\zipped.nif": 2048,
+  "textures\\big.dds": 30000
+ },
+ "103": {
+  "meshes\\v103.nif": 2048,
+  "textures\\t.dds": 5000
+ },
+ "104_embed": {
+  "textures\\dog.dds": 5000,
+  "textures\\bread.dds": 7000,
+  "meshes\\plain.nif": 64
+ }
+}
