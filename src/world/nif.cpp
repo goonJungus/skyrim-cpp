@@ -1,53 +1,35 @@
-// nif.cpp - Minimal runtime NIF parser (20.2.0.7).
-//
-// Focused on extracting static mesh geometry: NiTriShape/BSTriShape and
-// associated BSShaderTextureSet properties.
-
+// nif.cpp
 #include "skyrim/mesh.hpp"
-
 #include <cstring>
 #include <fstream>
-#include <sstream>
+#include <vector>
+#include <string>
 
 namespace skyrim {
 namespace {
-
-uint32_t rdU32(const uint8_t* p) {
-    return static_cast<uint32_t>(p[0]) |
-           (static_cast<uint32_t>(p[1]) << 8) |
-           (static_cast<uint32_t>(p[2]) << 16) |
-           (static_cast<uint32_t>(p[3]) << 24);
+inline uint32_t rdU32(const uint8_t* p){
+    return (uint32_t)p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);
 }
-
-uint16_t rdU16(const uint8_t* p) {
-    return static_cast<uint16_t>(p[0] | (p[1] << 8));
+inline uint16_t rdU16(const uint8_t* p){
+    return (uint16_t)(p[0] | (p[1]<<8));
 }
+} // namespace
 
-}  // namespace
-
-bool loadNifFromFile(const std::string& path, Mesh& out, std::string* error) {
+bool loadNifFromFile(const std::string& path, Mesh& out, std::string* error){
     std::ifstream f(path, std::ios::binary);
-    if (!f.is_open()) {
-        if (error) *error = "cannot open: " + path;
+    if(!f.is_open()){
+        if(error) *error = "cannot open: " + path;
         return false;
     }
-    std::vector<uint8_t> buf((std::istreambuf_iterator<char>(f)),
-                             std::istreambuf_iterator<char>());
+    std::vector<uint8_t> buf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     return loadNif(buf.data(), buf.size(), out, error);
 }
 
-bool loadNif(const uint8_t* data, size_t size, Mesh& out, std::string* error) {
+bool loadNif(const uint8_t* data, size_t size, Mesh& out, std::string* error){
     out = Mesh{};
-    auto fail = [&](const char* reason) {
-        if (error) *error = reason;
-        return false;
-    };
-    if (!data || size < 256) return fail("NIF too small");
-    // 0x14020007 = 20.2.0.7
-    const uint32_t ver = rdU32(data);
-    (void)ver;
-    if (error) *error = "NIF parser not fully implemented yet";
+    auto fail = [&](const char* r){ if(error) *error = r; return false; };
+    if(!data || size < 256) return fail("NIF too small");
+    if(error) *error = "NIF parser not fully implemented yet";
     return false;
 }
-
-}  // namespace skyrim
+} // namespace skyrim
