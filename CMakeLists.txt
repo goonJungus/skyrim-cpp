@@ -30,6 +30,7 @@ add_library(skyrim_module STATIC
   src/world/cell_system.cpp
   src/world/texture.cpp
   src/world/nif.cpp
+  src/world/world_render.cpp
   src/world/skyrim_world.cpp
 )
 
@@ -113,4 +114,9 @@ if(SKYRIM_BUILD_TESTS)
   add_executable(nif_test tests/nif_test.cpp)
   target_link_libraries(nif_test PRIVATE skyrim_module)
   add_test(NAME nif COMMAND nif_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/nif_fixture)
+
+  add_executable(world_render_test tests/world_render_test.cpp)
+  target_link_libraries(world_render_test PRIVATE skyrim_module)
+  add_test(NAME world_render
+           COMMAND world_render_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/worldrender_fixture)
 endif()
