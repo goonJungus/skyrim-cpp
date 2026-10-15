@@ -17,6 +17,7 @@ struct EngineOptions {
     int gridX = 0;
     int gridY = 0;
     int radius = 4;
+    int farRadius = 32;                  // cells out to the distant terrain; 0 = off
     int width = 1280;
     int height = 720;
     int frames = 0;                      // >0 renders that many frames then exits

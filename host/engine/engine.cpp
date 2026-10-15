@@ -19,6 +19,7 @@ int runEngine(const EngineOptions& options) {
     game.gridX = options.gridX;
     game.gridY = options.gridY;
     game.radius = options.radius;
+    game.farRadius = options.farRadius;
     game.width = options.width;
     game.height = options.height;
     game.maxFrames = options.frames;

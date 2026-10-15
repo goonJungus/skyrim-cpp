@@ -35,9 +35,8 @@ constexpr float kPlayerHeight = 128.0f;
 constexpr float kStepHeight = 50.0f;
 constexpr float kGravity = 800.0f;     // world units / s^2
 
-// Half-extent of the distant-terrain ring, in cells: 32 cells is a little under
-// two kilometres, which is as far as the fog lets anything be seen.
-constexpr int kFarRadiusCells = 32;
+// The distant-terrain ring is drawn as one mesh, uploaded under this key so a
+// rebuild can replace the GPU copy instead of leaking it.
 constexpr const char* kFarMeshKey = "far_terrain";
 
 // Stable key for a cell's terrain mesh, from its grid coordinate.
@@ -149,7 +148,7 @@ bool Game::init(const GameOptions& opt, std::string* err) {
     // metres wide and hide the landscape the ring exists to show. Without a ring
     // (interiors, a worldspace with no terrain) fall back to the stream extent.
     if (m_far != nullptr) {
-        const float farExtent = static_cast<float>(kFarRadiusCells) * kCellSize;
+        const float farExtent = static_cast<float>(m_opt.farRadius) * kCellSize;
         m_renderer.setFog(farExtent * 0.35f, farExtent * 1.05f);
     } else {
         const float streamExtent = (static_cast<float>(m_opt.radius) + 0.5f) * kCellSize;
@@ -316,19 +315,24 @@ void Game::reportContent() const {
                     "%zu white(>=0.99)\n",
                     tintSum / static_cast<double>(tintCount), tintCount, tintDark, tintNearWhite);
     }
-    size_t bitCount[16] = {};
+    // Only the shader flags the host does something with (or is about to) are
+    // worth a line; the full 16-bit map was all zeroes with a handful of hits.
+    size_t flagSkinned = 0, flagVertexAlpha = 0, flagSpecular = 0, flagEnvMap = 0,
+           flagRefraction = 0;
     for (const DrawItem& d : m_draw) {
         if (d.mesh == nullptr) continue;
         for (const Submesh& sm : d.mesh->submeshes) {
             if (sm.indexCount == 0) continue;
-            for (int b = 0; b < 16; b++) {
-                if ((sm.shaderFlags1 & (1u << b)) != 0) ++bitCount[b];
-            }
+            if (sm.shaderFlags1 & (1u << 1)) ++flagSkinned;
+            if (sm.shaderFlags1 & (1u << 3)) ++flagVertexAlpha;
+            if (sm.shaderFlags1 & (1u << 0)) ++flagSpecular;
+            if (sm.shaderFlags1 & (1u << 7)) ++flagEnvMap;
+            if (sm.shaderFlags1 & (1u << 15)) ++flagRefraction;
         }
     }
-    std::printf("skyrim: shaderFlags1 usage:");
-    for (int b = 0; b < 16; b++) std::printf(" %d:%zu", b, bitCount[b]);
-    std::printf("\n");
+    std::printf("skyrim: shader flags: %zu specular, %zu skinned, %zu vertex-alpha, "
+                "%zu env-map, %zu refraction\n",
+                flagSpecular, flagSkinned, flagVertexAlpha, flagEnvMap, flagRefraction);
     for (const std::string& s : m_missingSample) {
         std::printf("skyrim:   missing texture: %s\n", s.c_str());
     }
@@ -424,9 +428,10 @@ void Game::buildFarMesh(int gx, int gy) {
     // and a few thousand height samples cost nothing next to the frame it saves.
     m_renderer.releaseMesh(kFarMeshKey);
     m_far.reset();
+    if (m_opt.farRadius <= 0) return;   // ring switched off (--far 0)
 
     FarTerrainOptions opt;
-    opt.radiusCells = kFarRadiusCells;
+    opt.radiusCells = m_opt.farRadius;
     opt.holeRadiusCells = m_opt.radius;
     opt.landAt = [this](int cx, int cy) -> const Land* {
         const Cell* cell = m_cells.findCell(m_opt.worldspace, cx, cy);

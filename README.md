@@ -136,6 +136,7 @@ Useful flags:
 | `--ws HEX` | Worldspace FormID to start in (default `3C`, Tamriel) |
 | `--grid X Y` | Starting exterior cell (e.g. `4 -20` for Helgen) |
 | `--radius N` | Cells streamed around the player (default 4, i.e. 9×9) |
+| `--far N` | Cells out to the distant terrain ring (default 32; 0 turns it off) |
 | `--meshes BSA` | Archive to read meshes/textures from (repeatable) |
 | `--width W` / `--height H` | Window size |
 | `--fov DEG` | Vertical field of view (default 68) |

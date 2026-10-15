@@ -38,6 +38,7 @@ struct GameOptions {
     int gridX = 0;                       // starting cell grid coordinate
     int gridY = 0;
     int radius = 4;                      // cells streamed around the player
+    int farRadius = 32;                  // cells out to the distant terrain; 0 = off
     int width = 1280;
     int height = 720;
     int maxFrames = 0;                   // 0 = run until closed; >0 = bounded

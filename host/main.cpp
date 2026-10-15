@@ -38,6 +38,7 @@ struct Args {
     int gridX = 0;
     int gridY = 0;
     int radius = 4;
+    int farRadius = 32;
     int width = 1280;
     int height = 720;
     int frames = 0;
@@ -68,6 +69,8 @@ Args parseArgs(int argc, char** argv) {
             a.gridY = std::atoi(argv[++i]);
         } else if (k == "--radius" && i + 1 < argc) {
             a.radius = std::atoi(argv[++i]);
+        } else if (k == "--far" && i + 1 < argc) {
+            a.farRadius = std::atoi(argv[++i]);
         } else if (k == "--width" && i + 1 < argc) {
             a.width = std::atoi(argv[++i]);
         } else if (k == "--height" && i + 1 < argc) {
@@ -105,6 +108,8 @@ Args parseArgs(int argc, char** argv) {
                 "  --ws <hex>       worldspace FormID for --play (default 3C = Tamriel)\n"
                 "  --grid <x> <y>   starting exterior cell for --play\n"
                 "  --radius <n>     cells streamed around the player (default 4)\n"
+                "  --far <n>        cells out to the distant terrain ring (default 32,\n"
+                "                   0 turns the ring off)\n"
                 "  --meshes <bsa>   archive to load meshes/textures from (repeatable;\n"
                 "                   default: every *.bsa in the data folder)\n"
                 "  --width/--height window size for --play\n"
@@ -160,6 +165,7 @@ int main(int argc, char** argv) {
         engine.gridX = args.gridX;
         engine.gridY = args.gridY;
         engine.radius = args.radius;
+        engine.farRadius = args.farRadius;
         engine.width = args.width;
         engine.height = args.height;
         engine.frames = args.frames;
