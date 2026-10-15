@@ -45,6 +45,14 @@ struct RtVertex {
     float u = 0.0f, v = 0.0f;
 };
 
+// The sky dome is unlit and vertex-coloured.
+constexpr DWORD kSkyFvf = D3DFVF_XYZ | D3DFVF_DIFFUSE;
+
+struct SkyVertex {
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    DWORD color = 0xFFFFFFFFu;
+};
+
 class Renderer {
 public:
     bool init(int width, int height, const std::string& title, std::string* err);
@@ -54,8 +62,20 @@ public:
     bool pumpMessages();
 
     bool beginFrame();
-    void endFrame();
+    // endScene()/present() are split so a screenshot can be grabbed from the
+    // back buffer after drawing but before Present() discards it.
+    void endScene();
+    void present();
     void setCamera(const Mat4& view, const Mat4& proj);
+
+    // Draws the vertex-coloured sky dome centred on `eye`. Call once per frame
+    // after setCamera() and before any mesh draws; it leaves the pipe in the
+    // normal lit/fogged world state.
+    void drawSky(const Vec3& eye);
+
+    // Grabs the back buffer to a 24-bit BMP. Must be called after endScene()
+    // and before present(). Returns false if the device or file is unavailable.
+    bool saveScreenshot(const std::string& path);
 
     struct GpuMesh {
         IDirect3DVertexBuffer9* vb = nullptr;
@@ -83,11 +103,19 @@ public:
 private:
     bool createWindow(int width, int height, const std::string& title);
     bool createDevice();
+    bool createSky();
+    // Restores the lit + fogged state used for world geometry (the sky dome
+    // overrides several of these while it draws).
+    void applyWorldStates();
 
     HWND m_hwnd = nullptr;
     IDirect3D9* m_d3d = nullptr;
     IDirect3DDevice9* m_dev = nullptr;
     IDirect3DTexture9* m_white = nullptr;
+    IDirect3DVertexBuffer9* m_skyVb = nullptr;
+    IDirect3DIndexBuffer9* m_skyIb = nullptr;
+    UINT m_skyVertexCount = 0;
+    UINT m_skyIndexCount = 0;
     int m_width = 0;
     int m_height = 0;
     bool m_closed = false;

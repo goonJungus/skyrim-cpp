@@ -41,6 +41,12 @@ struct GameOptions {
     int height = 720;
     int maxFrames = 0;                   // 0 = run until closed; >0 = bounded
                                          // smoke test (skips input, grabs no cursor)
+    // Screenshot/inspection aids (all optional).
+    std::string shotPath;                // save the final frame here (24-bit BMP)
+    bool haveCam = false;                // place the camera instead of spawning
+    float camX = 0.0f, camY = 0.0f, camZ = 0.0f;
+    float lookYawDeg = 0.0f, lookPitchDeg = 0.0f;
+    float fovDeg = 68.0f;                // vertical field of view
 };
 
 class Game {
@@ -76,6 +82,10 @@ private:
     const Mesh* loadMesh(const std::string& modelPath);
     IDirect3DTexture9* loadTexture(const std::string& texPath);
 
+    // Prints how much of the streamed world resolved to real textures, so a
+    // washed-out frame can be told apart from a missing-texture one.
+    void reportContent() const;
+
     void updatePlayer(float dt);
     void updateColliders();
     Vec3 cameraEye() const;
@@ -95,6 +105,11 @@ private:
 
     std::unordered_map<const Mesh*, Aabb> m_meshBounds;   // mesh -> local bounds
     std::unordered_map<std::string, IDirect3DTexture9*> m_texCache;
+    // Content diagnostics (see reportContent()).
+    size_t m_texRequested = 0;
+    size_t m_texLoaded = 0;
+    size_t m_texMissing = 0;
+    std::vector<std::string> m_missingSample;
     // Per-cell terrain meshes, rebuilt per stream and uploaded once per cell
     // (the renderer caches GPU meshes by key, so revisits cost nothing).
     std::unordered_map<uint64_t, std::unique_ptr<Mesh>> m_terrain;

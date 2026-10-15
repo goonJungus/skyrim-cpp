@@ -41,6 +41,11 @@ struct Args {
     int width = 1280;
     int height = 720;
     int frames = 0;
+    std::string shot;
+    bool haveCam = false;
+    float camX = 0.0f, camY = 0.0f, camZ = 0.0f;
+    float lookYaw = 0.0f, lookPitch = 0.0f;
+    float fov = 68.0f;
 };
 
 Args parseArgs(int argc, char** argv) {
@@ -68,6 +73,18 @@ Args parseArgs(int argc, char** argv) {
             a.height = std::atoi(argv[++i]);
         } else if (k == "--frames" && i + 1 < argc) {
             a.frames = std::atoi(argv[++i]);
+        } else if (k == "--shot" && i + 1 < argc) {
+            a.shot = argv[++i];
+        } else if (k == "--cam" && i + 3 < argc) {
+            a.haveCam = true;
+            a.camX = static_cast<float>(std::atof(argv[++i]));
+            a.camY = static_cast<float>(std::atof(argv[++i]));
+            a.camZ = static_cast<float>(std::atof(argv[++i]));
+        } else if (k == "--look" && i + 2 < argc) {
+            a.lookYaw = static_cast<float>(std::atof(argv[++i]));
+            a.lookPitch = static_cast<float>(std::atof(argv[++i]));
+        } else if (k == "--fov" && i + 1 < argc) {
+            a.fov = static_cast<float>(std::atof(argv[++i]));
         } else if (k == "--types") {
             a.listTypes = true;
         } else if (k == "--limit" && i + 1 < argc) {
@@ -88,7 +105,11 @@ Args parseArgs(int argc, char** argv) {
                 "  --meshes <bsa>   archive to load meshes/textures from (repeatable;\n"
                 "                   default: every *.bsa in the data folder)\n"
                 "  --width/--height window size for --play\n"
-                "  --frames <n>     render n frames then exit (smoke test)\n");
+                "  --frames <n>     render n frames then exit (smoke test)\n"
+                "  --shot <file>    save the final frame as a BMP\n"
+                "  --cam <x> <y> <z> place a fixed camera (implies no simulation)\n"
+                "  --look <yawDeg> <pitchDeg>  fixed camera angles with --cam\n"
+                "  --fov <deg>      vertical field of view (default 68)\n");
             std::exit(0);
         }
     }
@@ -138,6 +159,14 @@ int main(int argc, char** argv) {
         engine.width = args.width;
         engine.height = args.height;
         engine.frames = args.frames;
+        engine.shotPath = args.shot;
+        engine.haveCam = args.haveCam;
+        engine.camX = args.camX;
+        engine.camY = args.camY;
+        engine.camZ = args.camZ;
+        engine.lookYawDeg = args.lookYaw;
+        engine.lookPitchDeg = args.lookPitch;
+        engine.fovDeg = args.fov;
         return skyrim::host::runEngine(engine);
     }
 

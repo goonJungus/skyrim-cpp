@@ -20,6 +20,11 @@ struct EngineOptions {
     int width = 1280;
     int height = 720;
     int frames = 0;                      // >0 renders that many frames then exits
+    std::string shotPath;                // save the final frame here (BMP)
+    bool haveCam = false;                // place the camera instead of spawning
+    float camX = 0.0f, camY = 0.0f, camZ = 0.0f;
+    float lookYawDeg = 0.0f, lookPitchDeg = 0.0f;
+    float fovDeg = 68.0f;
 };
 
 // True when this build has a real renderer (Windows).

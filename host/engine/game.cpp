@@ -92,8 +92,15 @@ bool Game::init(const GameOptions& opt, std::string* err) {
     m_player.pos = Vec3{cx, cy, spawnZ};
     m_player.yaw = 0.0f;
     m_player.pitch = -0.15f;
+    if (opt.haveCam) {
+        m_player.pos = Vec3{opt.camX, opt.camY, opt.camZ};
+        m_player.yaw = opt.lookYawDeg * 3.14159265f / 180.0f;
+        m_player.pitch = opt.lookPitchDeg * 3.14159265f / 180.0f;
+        rebuildStream(m_player.pos.x, m_player.pos.y);
+    }
     std::printf("skyrim: %zu instances, %zu colliders, spawn z=%.0f\n", m_draw.size(),
                 m_colliders.size(), m_player.pos.z);
+    reportContent();
     return true;
 }
 
@@ -134,6 +141,7 @@ IDirect3DTexture9* Game::loadTexture(const std::string& texPath) {
     const std::string key = normalizePath(texPath);
     auto it = m_texCache.find(key);
     if (it != m_texCache.end()) return it->second;
+    ++m_texRequested;
 
     // NIF paths carry the "textures\" root; land-texture paths (TX00) do not,
     // so try both spellings against the archives.
@@ -154,8 +162,40 @@ IDirect3DTexture9* Game::loadTexture(const std::string& texPath) {
         }
         if (result != nullptr) break;
     }
+    if (result != nullptr) {
+        ++m_texLoaded;
+    } else {
+        ++m_texMissing;
+        if (m_missingSample.size() < 16) m_missingSample.push_back(key);
+    }
     m_texCache.emplace(key, result);
     return result;
+}
+
+void Game::reportContent() const {
+    // Count submeshes the frame will actually draw, split by whether they got a
+    // real texture or fall through to the flat fallback colour.
+    size_t subTextured = 0, subFlat = 0, subEmpty = 0;
+    for (const DrawItem& d : m_draw) {
+        if (d.mesh == nullptr) continue;
+        for (size_t i = 0; i < d.mesh->submeshes.size(); i++) {
+            if (d.mesh->submeshes[i].indexCount == 0) continue;
+            const bool haveTex = i < d.textures.size() && d.textures[i] != nullptr;
+            if (haveTex) {
+                ++subTextured;
+            } else if (d.mesh->submeshes[i].texturePath.empty()) {
+                ++subEmpty;
+            } else {
+                ++subFlat;
+            }
+        }
+    }
+    std::printf("skyrim: textures %zu/%zu resolved (%zu missing), submeshes %zu textured, "
+                "%zu untextured (no path), %zu failed to load\n",
+                m_texLoaded, m_texRequested, m_texMissing, subTextured, subEmpty, subFlat);
+    for (const std::string& s : m_missingSample) {
+        std::printf("skyrim:   missing texture: %s\n", s.c_str());
+    }
 }
 
 void Game::buildCell(int gx, int gy, std::vector<DrawItem>& out) {
@@ -422,28 +462,43 @@ int Game::run() {
 
         if (keyDown(VK_ESCAPE)) break;   // quit
 
-        updatePlayer(dt);
+        if (!m_opt.haveCam) {
+            updatePlayer(dt);
 
-        const int gx = static_cast<int>(std::floor(m_player.pos.x / kCellSize));
-        const int gy = static_cast<int>(std::floor(m_player.pos.y / kCellSize));
-        if (gx != m_centerGx || gy != m_centerGy) {
-            rebuildStream(m_player.pos.x, m_player.pos.y);
+            const int gx = static_cast<int>(std::floor(m_player.pos.x / kCellSize));
+            const int gy = static_cast<int>(std::floor(m_player.pos.y / kCellSize));
+            if (gx != m_centerGx || gy != m_centerGy) {
+                rebuildStream(m_player.pos.x, m_player.pos.y);
+            }
         }
 
         if (m_renderer.beginFrame()) {
             const float aspect =
                 static_cast<float>(m_renderer.width()) / static_cast<float>(m_renderer.height());
-            const Mat4 proj = perspectiveFovLH(1.2f, aspect, 5.0f, 150000.0f);
+            const float fov = m_opt.fovDeg * 3.14159265f / 180.0f;
+            const Mat4 proj = perspectiveFovLH(fov, aspect, 5.0f, 150000.0f);
             const Vec3 eye = cameraEye();
             const Mat4 view = lookAtLH(eye, eye + cameraForward(), Vec3{0.0f, 0.0f, 1.0f});
             m_renderer.setCamera(view, proj);
+            m_renderer.drawSky(eye);
             for (const DrawItem& d : m_draw) {
                 m_renderer.drawMesh(d.gpu, *d.mesh, d.world, d.textures);
             }
-            m_renderer.endFrame();
+            m_renderer.endScene();
+
+            ++frame;
+            const bool lastFrame = m_opt.maxFrames > 0 && frame >= m_opt.maxFrames;
+            if (lastFrame && !m_opt.shotPath.empty()) {
+                if (m_renderer.saveScreenshot(m_opt.shotPath)) {
+                    std::printf("skyrim: wrote %s\n", m_opt.shotPath.c_str());
+                } else {
+                    std::printf("skyrim: failed to write %s\n", m_opt.shotPath.c_str());
+                }
+            }
+            m_renderer.present();
         }
 
-        if (m_opt.maxFrames > 0 && ++frame >= m_opt.maxFrames) break;
+        if (m_opt.maxFrames > 0 && frame >= m_opt.maxFrames) break;
     }
     if (m_opt.maxFrames > 0) {
         std::printf("skyrim: rendered %d frames, exiting\n", frame);

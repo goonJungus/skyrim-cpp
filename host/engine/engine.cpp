@@ -22,6 +22,14 @@ int runEngine(const EngineOptions& options) {
     game.width = options.width;
     game.height = options.height;
     game.maxFrames = options.frames;
+    game.shotPath = options.shotPath;
+    game.haveCam = options.haveCam;
+    game.camX = options.camX;
+    game.camY = options.camY;
+    game.camZ = options.camZ;
+    game.lookYawDeg = options.lookYawDeg;
+    game.lookPitchDeg = options.lookPitchDeg;
+    game.fovDeg = options.fovDeg;
 
     Game session;
     std::string err;
