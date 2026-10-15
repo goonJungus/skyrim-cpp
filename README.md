@@ -8,22 +8,23 @@ portable C++20 that reads your own copy of the game and draws the world with
 code written from scratch. It is a port, not a mod: no injected DLLs, no patched
 executable, and no hooks into the original binary.
 
-You can already stand in Helgen and look out over the streamed exterior —
-buildings and rocks read straight from your own archives, lit and textured by
-this engine. The RPG, the people and the quests are still to come.
+You can already stand on the ground at Helgen and look out over the streamed
+exterior — terrain, buildings and rocks read straight from your own archives,
+lit and textured by this engine. The RPG, the people and the quests are still to
+come.
 
 ## Status
 
 <!-- progress:start -->
 ```
-██████░░░░░░░░░░░░░░  29%
+███████░░░░░░░░░░░░░  33%
 ```
-**10 done, 1 in progress, 19 to go** across 30 milestones, weighted by effort (see [ROADMAP.md](ROADMAP.md)).
+**11 done, 2 in progress, 18 to go** across 31 milestones, weighted by effort (see [ROADMAP.md](ROADMAP.md)).
 <!-- progress:end -->
 
 The data layer and the world are in place, and there is a walkable slice of
-Tamriel on screen. What remains is mostly the game itself: terrain, interiors,
-combat, AI and quests.
+Tamriel on screen. What remains is mostly the game itself: interiors, combat, AI
+and quests.
 
 ## What works today
 
@@ -39,13 +40,17 @@ combat, AI and quests.
   community converter exactly at 13,329 verts / 9,524 tris / 12 groups.
 - Textures are decoded from the original `.dds` files (BC1/BC2/BC3 and
   uncompressed) straight to the GPU.
+- Exterior terrain is built from the original `LAND` records: the 33×33 vertex
+  heightmap is reconstructed from its difference encoding and textured by the
+  cell's own land textures, so you walk on the real ground rather than on boxes.
 - The exterior world streams around you a cell at a time as you move.
 
 **Rendering and playing**
 - A Direct3D 9 host: lit and textured surfaces, alpha cutout for foliage and
   fences, and a GPU cache for meshes and textures.
 - A first-person controller with gravity, jumping and step-up, plus a free-fly
-  mode for looking around. Collision uses the streamed geometry as it stands.
+  mode for looking around. You stand on the terrain heightmap and collide with
+  the placed geometry as it streams in.
 - English string tables (`.STRINGS`) resolve the game's names.
 
 **Launcher**

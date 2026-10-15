@@ -48,6 +48,10 @@ public:
     // Empty when the base is unknown or carries no model.
     std::string modelPath(FormID base) const;
 
+    // Diffuse texture path for a landscape texture (LTEX): follows
+    // LTEX -> TNAM (texture set) -> TXST -> TX00. Empty when unresolved.
+    std::string texturePath(FormID landTexture) const;
+
 private:
     const FormDatabase* m_db = nullptr;
 };
@@ -56,6 +60,12 @@ private:
 // order. Objects whose base is unresolved or modelless are skipped.
 std::vector<PlacedModel> instancesForCell(const Cell& cell,
                                           const ModelResolver& resolver);
+
+// Build an exterior cell's terrain as a mesh in world space: a 32x32 quad grid
+// spanning the cell square, lifted by the cell's LAND heightmap. One submesh
+// carries the base land texture's diffuse path (empty when unresolved).
+// Returns false when the cell has no terrain (interiors, or a missing LAND).
+bool buildTerrainMesh(const Cell& cell, const ModelResolver& resolver, Mesh& out);
 
 // Loads and caches meshes by model path, reading from one or more BSA archives.
 // Lookups are case-insensitive and tolerate a missing "meshes\\" prefix, since

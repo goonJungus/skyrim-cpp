@@ -56,6 +56,7 @@ private:
         Renderer::GpuMesh* gpu = nullptr;
         Mat4 world;
         std::vector<IDirect3DTexture9*> textures;
+        bool terrain = false;   // terrain surface (excluded from box collision)
     };
 
     // Player, in world units (1 unit ~ 1.43 cm; the player is ~128 units tall).
@@ -80,6 +81,10 @@ private:
     Vec3 cameraEye() const;
     Vec3 cameraForward() const;
 
+    // Ground height of the streamed terrain under a world position, if any
+    // exterior cell with a heightmap covers it.
+    bool terrainHeightAt(float x, float y, float& outZ) const;
+
     GameOptions m_opt;
     Renderer m_renderer;
     FormDatabase m_db;
@@ -90,6 +95,9 @@ private:
 
     std::unordered_map<const Mesh*, Aabb> m_meshBounds;   // mesh -> local bounds
     std::unordered_map<std::string, IDirect3DTexture9*> m_texCache;
+    // Per-cell terrain meshes, rebuilt per stream and uploaded once per cell
+    // (the renderer caches GPU meshes by key, so revisits cost nothing).
+    std::unordered_map<uint64_t, std::unique_ptr<Mesh>> m_terrain;
     std::vector<DrawItem> m_draw;
     std::vector<Aabb> m_colliders;
     float m_floorZ = 0.0f;

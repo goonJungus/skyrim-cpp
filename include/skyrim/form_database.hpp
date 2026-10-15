@@ -78,6 +78,9 @@ constexpr RecordType kARMO = makeRecordType('A','R','M','O');
 constexpr RecordType kWEAP = makeRecordType('W','E','A','P');
 constexpr RecordType kKEYN = makeRecordType('K','E','Y','N');
 constexpr RecordType kENCH = makeRecordType('E','N','C','H');
+constexpr RecordType kLAND = makeRecordType('L','A','N','D');  // terrain
+constexpr RecordType kLTEX = makeRecordType('L','T','E','X');  // land texture
+constexpr RecordType kTXST = makeRecordType('T','X','S','T');  // texture set
 }  // namespace rec
 
 // ---------------------------------------------------------------------------
@@ -101,6 +104,10 @@ constexpr RecordType kDESC = makeRecordType('D','E','S','C');
 constexpr RecordType kSNAM = makeRecordType('S','N','A','M');  // master description
 constexpr RecordType kCNAM = makeRecordType('C','N','A','M');  // master author
 constexpr RecordType kHEDR = makeRecordType('H','E','D','R');  // header data
+constexpr RecordType kVHGT = makeRecordType('V','H','G','T');  // LAND vertex heights
+constexpr RecordType kBTXT = makeRecordType('B','T','X','T');  // LAND base texture
+constexpr RecordType kTNAM = makeRecordType('T','N','A','M');  // texture set link
+constexpr RecordType kTX00 = makeRecordType('T','X','0','0');  // diffuse texture path
 }  // namespace sub
 
 // ---------------------------------------------------------------------------

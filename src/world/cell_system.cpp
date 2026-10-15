@@ -217,6 +217,9 @@ bool walk(const uint8_t* p, const uint8_t* end, int depth, WalkState& st,
                 }
 
                 cells[st.currentCell].objects.push_back(std::move(obj));
+            } else if (type == rec::kLAND && st.currentCell != kNoCell) {
+                // Terrain for the current exterior cell (interiors have none).
+                decodeLand(payloadData, payloadSize, cells[st.currentCell].land);
             }
         }
 

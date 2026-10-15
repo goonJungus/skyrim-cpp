@@ -35,6 +35,16 @@ constexpr float kPlayerHeight = 128.0f;
 constexpr float kStepHeight = 50.0f;
 constexpr float kGravity = 800.0f;     // world units / s^2
 
+// Stable key for a cell's terrain mesh, from its grid coordinate.
+uint64_t gridKey(int gx, int gy) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(gx)) << 32) |
+           static_cast<uint64_t>(static_cast<uint32_t>(gy));
+}
+
+std::string terrainMeshKey(int gx, int gy) {
+    return "terrain_" + std::to_string(gx) + "_" + std::to_string(gy);
+}
+
 }  // namespace
 
 bool Game::init(const GameOptions& opt, std::string* err) {
@@ -74,7 +84,12 @@ bool Game::init(const GameOptions& opt, std::string* err) {
     for (const Aabb& b : m_colliders) {
         if (b.valid() && b.mx.z > top) top = b.mx.z;
     }
-    m_player.pos = Vec3{cx, cy, top + 400.0f};
+    float spawnZ = top + 400.0f;
+    float terrainZ = 0.0f;
+    if (terrainHeightAt(cx, cy, terrainZ)) {
+        spawnZ = std::max(spawnZ, terrainZ + 400.0f);
+    }
+    m_player.pos = Vec3{cx, cy, spawnZ};
     m_player.yaw = 0.0f;
     m_player.pitch = -0.15f;
     std::printf("skyrim: %zu instances, %zu colliders, spawn z=%.0f\n", m_draw.size(),
@@ -120,16 +135,24 @@ IDirect3DTexture9* Game::loadTexture(const std::string& texPath) {
     auto it = m_texCache.find(key);
     if (it != m_texCache.end()) return it->second;
 
+    // NIF paths carry the "textures\" root; land-texture paths (TX00) do not,
+    // so try both spellings against the archives.
+    std::vector<std::string> candidates{key};
+    if (key.compare(0, 9, "textures\\") != 0) candidates.push_back("textures\\" + key);
+
     IDirect3DTexture9* result = nullptr;
     for (auto& bsa : m_archives) {
-        if (!bsa->has(key)) continue;
-        const std::vector<uint8_t> data = bsa->read(key);
-        if (data.empty()) continue;
-        Image img;
-        if (decodeDDS(data.data(), data.size(), img, nullptr) && img.valid()) {
-            result = m_renderer.uploadTexture(key, img);
-            break;
+        for (const std::string& cand : candidates) {
+            if (!bsa->has(cand)) continue;
+            const std::vector<uint8_t> data = bsa->read(cand);
+            if (data.empty()) continue;
+            Image img;
+            if (decodeDDS(data.data(), data.size(), img, nullptr) && img.valid()) {
+                result = m_renderer.uploadTexture(key, img);
+                break;
+            }
         }
+        if (result != nullptr) break;
     }
     m_texCache.emplace(key, result);
     return result;
@@ -138,6 +161,33 @@ IDirect3DTexture9* Game::loadTexture(const std::string& texPath) {
 void Game::buildCell(int gx, int gy, std::vector<DrawItem>& out) {
     const Cell* cell = m_cells.findCell(m_opt.worldspace, gx, gy);
     if (cell == nullptr) return;
+
+    // Terrain first, so it sits under everything placed on it.
+    if (cell->land.present) {
+        auto& slot = m_terrain[gridKey(gx, gy)];
+        if (!slot) {
+            auto mesh = std::make_unique<Mesh>();
+            if (buildTerrainMesh(*cell, m_resolver, *mesh) && mesh->valid()) {
+                slot = std::move(mesh);
+            }
+        }
+        if (slot) {
+            Renderer::GpuMesh* gpu = m_renderer.uploadMesh(terrainMeshKey(gx, gy), *slot);
+            if (gpu != nullptr) {
+                DrawItem item;
+                item.mesh = slot.get();
+                item.gpu = gpu;
+                item.world = Mat4{};   // world-space vertices; identity transform
+                item.terrain = true;
+                item.textures.reserve(slot->submeshes.size());
+                for (const Submesh& sm : slot->submeshes) {
+                    item.textures.push_back(loadTexture(sm.texturePath));
+                }
+                out.push_back(std::move(item));
+            }
+        }
+    }
+
     const std::vector<PlacedModel> inst = instancesForCell(*cell, m_resolver);
     for (const PlacedModel& m : inst) {
         const Mesh* mesh = loadMesh(m.modelPath);
@@ -158,6 +208,7 @@ void Game::buildCell(int gx, int gy, std::vector<DrawItem>& out) {
 
 void Game::rebuildStream(float centerX, float centerY) {
     m_draw.clear();
+    m_terrain.clear();
     const int gx = static_cast<int>(std::floor(centerX / kCellSize));
     const int gy = static_cast<int>(std::floor(centerY / kCellSize));
     m_centerGx = gx;
@@ -176,6 +227,7 @@ void Game::updateColliders() {
     bool have = false;
     float floorZ = 0.0f;
     for (const DrawItem& d : m_draw) {
+        if (d.terrain) continue;   // terrain is a surface, not a box
         Aabb local;
         auto it = m_meshBounds.find(d.mesh);
         if (it == m_meshBounds.end()) {
@@ -210,6 +262,37 @@ Vec3 Game::cameraForward() const {
 
 Vec3 Game::cameraEye() const {
     return Vec3{m_player.pos.x, m_player.pos.y, m_player.pos.z + kEyeHeight};
+}
+
+bool Game::terrainHeightAt(float x, float y, float& outZ) const {
+    const int gx = static_cast<int>(std::floor(x / kCellSize));
+    const int gy = static_cast<int>(std::floor(y / kCellSize));
+    const Cell* cell = m_cells.findCell(m_opt.worldspace, gx, gy);
+    if (cell == nullptr || cell->isInterior || !cell->land.present) return false;
+
+    float h[kLandVertices];
+    cell->land.heights(h);
+
+    // Bilinear sample of the 33x33 vertex grid; clamp so edge points stay in.
+    const float fx = (x - cell->worldMinX) / kLandVertexSpacing;
+    const float fy = (y - cell->worldMinY) / kLandVertexSpacing;
+    int col = static_cast<int>(std::floor(fx));
+    int row = static_cast<int>(std::floor(fy));
+    if (col < 0) col = 0;
+    if (col > kLandEdge - 2) col = kLandEdge - 2;
+    if (row < 0) row = 0;
+    if (row > kLandEdge - 2) row = kLandEdge - 2;
+    const float tx = fx - static_cast<float>(col);
+    const float ty = fy - static_cast<float>(row);
+
+    const float h00 = h[row * kLandEdge + col];
+    const float h10 = h[row * kLandEdge + col + 1];
+    const float h01 = h[(row + 1) * kLandEdge + col];
+    const float h11 = h[(row + 1) * kLandEdge + col + 1];
+    const float a = h00 + (h10 - h00) * tx;
+    const float b = h01 + (h11 - h01) * tx;
+    outZ = a + (b - a) * ty;
+    return true;
 }
 
 void Game::updatePlayer(float dt) {
@@ -272,6 +355,14 @@ void Game::updatePlayer(float dt) {
         if (m_player.pos.x <= b.mn.x - kPlayerRadius || m_player.pos.x >= b.mx.x + kPlayerRadius) continue;
         if (m_player.pos.y <= b.mn.y - kPlayerRadius || m_player.pos.y >= b.mx.y + kPlayerRadius) continue;
         if (b.mx.z <= m_player.pos.z + kStepHeight && b.mx.z > ground) ground = b.mx.z;
+    }
+    // Terrain underfoot: the heightmap is the real floor in the open world. It
+    // counts as ground while its surface is within step height of the feet, so
+    // the player climbs slopes instead of clipping through them.
+    float terrainZ = 0.0f;
+    if (terrainHeightAt(m_player.pos.x, m_player.pos.y, terrainZ) &&
+        terrainZ <= m_player.pos.z + kStepHeight && terrainZ > ground) {
+        ground = terrainZ;
     }
     m_player.grounded = false;
     if (ground > -1e29f && m_player.pos.z <= ground) {
@@ -362,6 +453,7 @@ int Game::run() {
 
 void Game::shutdown() {
     m_draw.clear();
+    m_terrain.clear();
     m_colliders.clear();
     m_texCache.clear();
     m_meshBounds.clear();

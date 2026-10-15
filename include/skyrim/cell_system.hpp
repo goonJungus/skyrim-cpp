@@ -20,6 +20,7 @@
 //                    XCLC (int32 x, int32 y grid coordinate, exterior only)
 //   REFR/ACHR subrecords: EDID, NAME (base object FormID),
 //                    DATA (float x,y,z position + float rotX,rotY,rotZ)
+//   LAND subrecords: VHGT (terrain heights), BTXT (base land texture)
 //
 // ESM group tree for cells:
 //   GRUP "CELL" (top level)
@@ -42,6 +43,7 @@
 #include <vector>
 
 #include "skyrim/form_database.hpp"
+#include "skyrim/land.hpp"
 
 namespace skyrim {
 
@@ -86,6 +88,9 @@ struct Cell {
 
     LocalizedString name;   // FULL, resolved later by StringResolver
     std::string editorId;   // EDID
+
+    // Terrain heightmap (exterior cells only; absent in interiors).
+    Land land;
 
     std::vector<CellObject> objects;
 };

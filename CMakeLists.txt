@@ -27,6 +27,7 @@ add_library(skyrim_module STATIC
   src/world/form_database.cpp
   src/world/string_table.cpp
   src/world/cell_system.cpp
+  src/world/land.cpp
   src/world/texture.cpp
   src/world/nif.cpp
   src/world/world_render.cpp
@@ -178,5 +179,10 @@ if(SKYRIM_BUILD_TESTS)
     add_executable(world_render_test tests/world_render_test.cpp)
     target_link_libraries(world_render_test PRIVATE skyrim_module)
     skyrim_test(worldrender world_render_test "${SKYRIM_FIXTURE_DIR}/worldrender")
+
+    # land_test builds its LAND payload in memory, so it needs no fixture.
+    add_executable(land_test tests/land_test.cpp)
+    target_link_libraries(land_test PRIVATE skyrim_module)
+    add_test(NAME land COMMAND land_test)
   endif()
 endif()

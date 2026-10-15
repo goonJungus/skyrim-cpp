@@ -143,6 +143,42 @@ Not yet handled: NavMesh (`NAVM`), cell `DATA` flags beyond
 exterior/interior, `REFR` `XESP` enable-parent state, and cross-plugin cell
 overrides (which need the file's `MAST` list to remap).
 
+## Terrain (`LAND`)
+
+Each exterior cell carries a `LAND` record (a child of the cell's group, next to
+its `REFR`s) holding the ground heightmap and its textures.
+
+**`VHGT` is difference-encoded, not an absolute grid.** It is 1096 bytes: a
+`float` anchor (the south-west corner height) followed by **1089 signed bytes**,
+then 3 padding bytes. Each stored unit is worth **8 game units**. Reconstruction
+is a running sum with a twist: for a row, column 0 adds into the shared anchor
+(so rows chain vertically) and the remaining columns accumulate into a per-row
+offset. Heights are absolute world Z, and they agree with the placed objects:
+sampling a building's reference position against the heightmap under it lands
+within a few dozen units. The grid is row-major from the south edge, column 0 at
+the west edge, and vertices sit 128 units apart (33² over the 4096-unit cell).
+
+**`BTXT` is optional and is a FormID, not a path.** It names the base land
+texture (`LTEX`) for the whole cell. Plenty of cells omit it entirely and
+describe every quadrant through `ATXT` instead. Either way the texture is one
+indirection away from an actual file:
+
+```
+BTXT / ATXT -> LTEX --TNAM--> TXST --TX00--> "Landscape\\FieldGrass01.dds"
+```
+
+`ATXT` is 8 bytes: `u32` `LTEX` FormID, `u8` quadrant (0 = bottom-left, 1 =
+bottom-right, 2 = upper-left, 3 = upper-right), `u8` unknown, `u16` layer. The
+reader keeps each quadrant's lowest layer as its texture. The terrain mesh is
+split into the four quadrants so each can carry its own texture; adjacent
+quadrants that share one merge into a single submesh. Real Skyrim blends layers
+per vertex (`VCLR` / `VTXT` weights), which is not done yet — the quadrant
+texture is a stand-in.
+
+A quirk worth recording: `TX00` paths (and `LTEX` generally) are relative to the
+`Data` folder **without** a `textures\` root, unlike NIF texture paths. The host
+therefore tries a `textures\`-prefixed spelling as a fallback.
+
 ## NIF meshes
 
 The mesh loader is a faithful port of the community converter `convert_mesh.py`
