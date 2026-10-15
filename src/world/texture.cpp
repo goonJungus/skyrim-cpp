@@ -236,7 +236,6 @@ bool inspectDDS(const uint8_t* data, size_t size, TextureInfo& out, std::string*
 
     const uint32_t pfFlags = rdU32(data + kBase + kOffPf + kPfFlags);
     const uint32_t fourCC  = rdU32(data + kBase + kOffPf + kPfFourCCOfs);
-    const uint32_t pf       = kOffPf;
 
     if (pfFlags & kPfFourCCFlag) {
         if (fourCC == 0x31545844u) {  // "DXT1"
@@ -251,8 +250,8 @@ bool inspectDDS(const uint8_t* data, size_t size, TextureInfo& out, std::string*
             out.format = TextureFormat::BC5; out.compressed = true; out.blockBytes = 16;
         } else if (fourCC == 0x30315844u) {  // "DX10" extended header
             if (size < kHeaderBytes + kDx10Bytes) return fail("DX10 header truncated");
-            const uint32_t dxgi = rdU32(data + kHeaderBytes); // DX10 follows after base header (at headerBytes+base)
-            // wait: kHeaderBytes=128; data layout: [4 magic][124 header] = 128. DX10 comes right after 124.
+            // The DX10 header follows the 128-byte base header; its first field
+            // is the DXGI format.
             const uint32_t dxgiFmt = rdU32(data + kHeaderBytes);
             switch (dxgiFmt) {
                 case kDxgiBC1: case kDxgiBC1Srgb:

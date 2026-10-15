@@ -148,4 +148,51 @@ struct Aabb {
     }
 };
 
+// View frustum as six planes (a, b, c, d) with a*x + b*y + c*z + d >= 0 meaning
+// "inside", extracted from a row-vector view*projection matrix.
+//
+// With row vectors, clip component i is the coefficient vector
+//   C_i = (m[i], m[4+i], m[8+i], m[12+i])   (stride 4 -- a column read)
+// dotted with (v, 1). Inside the frustum means -w <= x <= w, -w <= y <= w and
+// 0 <= z <= w (left-handed D3D), which gives the six planes below. They are
+// normalised so sphereInFrustum can compare a real radius against them.
+struct Frustum {
+    float p[6][4] = {};
+};
+
+inline Frustum frustumFromViewProj(const Mat4& vp) {
+    Frustum f;
+    // Row r of the matrix contributes element r of every coefficient vector:
+    // x = C_0[r], y = C_1[r], z = C_2[r], w = C_3[r].
+    for (int r = 0; r < 4; r++) {
+        const float x = vp.m[4 * r + 0];
+        const float y = vp.m[4 * r + 1];
+        const float z = vp.m[4 * r + 2];
+        const float w = vp.m[4 * r + 3];
+        f.p[0][r] = x + w;   // left   (x + w >= 0)
+        f.p[1][r] = w - x;   // right  (w - x >= 0)
+        f.p[2][r] = y + w;   // bottom (y + w >= 0)
+        f.p[3][r] = w - y;   // top    (w - y >= 0)
+        f.p[4][r] = z;       // near   (z >= 0)
+        f.p[5][r] = w - z;   // far    (w - z >= 0)
+    }
+    for (int i = 0; i < 6; i++) {
+        const float len = std::sqrt(f.p[i][0] * f.p[i][0] + f.p[i][1] * f.p[i][1] +
+                                    f.p[i][2] * f.p[i][2]);
+        if (len > 1e-12f) {
+            for (int k = 0; k < 4; k++) f.p[i][k] /= len;
+        }
+    }
+    return f;
+}
+
+inline bool sphereInFrustum(const Frustum& f, const Vec3& c, float r) {
+    for (int i = 0; i < 6; i++) {
+        const float d =
+            f.p[i][0] * c.x + f.p[i][1] * c.y + f.p[i][2] * c.z + f.p[i][3];
+        if (d < -r) return false;
+    }
+    return true;
+}
+
 }  // namespace skyrim::host

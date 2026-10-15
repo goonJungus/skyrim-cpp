@@ -14,6 +14,7 @@
 #ifdef _WIN32
 
 #include <memory>
+#include <array>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -36,7 +37,7 @@ struct GameOptions {
     FormID worldspace = 0x0000003C;      // Tamriel
     int gridX = 0;                       // starting cell grid coordinate
     int gridY = 0;
-    int radius = 1;                      // cells streamed around the player
+    int radius = 4;                      // cells streamed around the player
     int width = 1280;
     int height = 720;
     int maxFrames = 0;                   // 0 = run until closed; >0 = bounded
@@ -47,6 +48,7 @@ struct GameOptions {
     float camX = 0.0f, camY = 0.0f, camZ = 0.0f;
     float lookYawDeg = 0.0f, lookPitchDeg = 0.0f;
     float fovDeg = 68.0f;                // vertical field of view
+    float exposure = 1.8f;               // post-lighting gain (1..2)
 };
 
 class Game {
@@ -63,6 +65,10 @@ private:
         Mat4 world;
         std::vector<IDirect3DTexture9*> textures;
         bool terrain = false;   // terrain surface (excluded from box collision)
+        bool blend = false;     // drawn in the back-to-front transparent pass
+        Vec3 center;            // world-space bounding-sphere centre
+        float radius = 0.0f;    // bounding-sphere radius
+        Aabb bounds;            // world-space AABB (also used for collision)
     };
 
     // Player, in world units (1 unit ~ 1.43 cm; the player is ~128 units tall).
@@ -79,8 +85,16 @@ private:
     void rebuildStream(float centerX, float centerY);
     void buildCell(int gx, int gy, std::vector<DrawItem>& out);
 
+    // Rebuilds the distant-terrain ring around a cell. It is the view to the
+    // horizon: one coarse mesh drawn in a single call, sampled from the same
+    // heightmaps the streamed cells use so the two meet without a seam.
+    void buildFarMesh(int gx, int gy);
+
     const Mesh* loadMesh(const std::string& modelPath);
     IDirect3DTexture9* loadTexture(const std::string& texPath);
+
+    // Cached local-space bounds of a mesh; false when it has no vertices.
+    bool meshBounds(const Mesh* mesh, Aabb& out);
 
     // Prints how much of the streamed world resolved to real textures, so a
     // washed-out frame can be told apart from a missing-texture one.
@@ -105,6 +119,9 @@ private:
 
     std::unordered_map<const Mesh*, Aabb> m_meshBounds;   // mesh -> local bounds
     std::unordered_map<std::string, IDirect3DTexture9*> m_texCache;
+    // Mean colour of each texture seen so far, for the distant terrain: it shows
+    // ground colour without drawing the landscape textures at all.
+    std::unordered_map<std::string, std::array<float, 3>> m_texColor;
     // Content diagnostics (see reportContent()).
     size_t m_texRequested = 0;
     size_t m_texLoaded = 0;
@@ -113,9 +130,19 @@ private:
     // Per-cell terrain meshes, rebuilt per stream and uploaded once per cell
     // (the renderer caches GPU meshes by key, so revisits cost nothing).
     std::unordered_map<uint64_t, std::unique_ptr<Mesh>> m_terrain;
+    // Per-cell terrain blend layers, keyed the same way. One vector per cell.
+    std::unordered_map<uint64_t, std::vector<std::unique_ptr<Mesh>>> m_terrainLayers;
+    // The distant-terrain ring, rebuilt as the player crosses cells, plus the key
+    // its GPU copy is uploaded under so it can be replaced.
+    std::unique_ptr<Mesh> m_far;
     std::vector<DrawItem> m_draw;
+    std::vector<DrawItem*> m_opaque;    // per-frame draw lists, frustum culled
+    std::vector<DrawItem*> m_blended;
     std::vector<Aabb> m_colliders;
     float m_floorZ = 0.0f;
+    double m_frameMs = 0.0;             // accumulated render time (diagnostics)
+    size_t m_frameCount = 0;
+    size_t m_lastVisible = 0;
 
     Player m_player;
     int m_centerGx = 1 << 30;   // forces a stream on the first frame

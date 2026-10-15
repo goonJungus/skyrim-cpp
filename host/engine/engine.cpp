@@ -30,6 +30,7 @@ int runEngine(const EngineOptions& options) {
     game.lookYawDeg = options.lookYawDeg;
     game.lookPitchDeg = options.lookPitchDeg;
     game.fovDeg = options.fovDeg;
+    game.exposure = options.exposure;
 
     Game session;
     std::string err;

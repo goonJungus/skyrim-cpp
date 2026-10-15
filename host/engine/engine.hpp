@@ -16,7 +16,7 @@ struct EngineOptions {
     uint32_t worldspace = 0x0000003C;    // Tamriel
     int gridX = 0;
     int gridY = 0;
-    int radius = 1;
+    int radius = 4;
     int width = 1280;
     int height = 720;
     int frames = 0;                      // >0 renders that many frames then exits
@@ -25,6 +25,7 @@ struct EngineOptions {
     float camX = 0.0f, camY = 0.0f, camZ = 0.0f;
     float lookYawDeg = 0.0f, lookPitchDeg = 0.0f;
     float fovDeg = 68.0f;
+    float exposure = 1.8f;               // post-lighting gain (1..2)
 };
 
 // True when this build has a real renderer (Windows).

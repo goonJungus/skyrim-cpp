@@ -35,6 +35,11 @@ constexpr float kPlayerHeight = 128.0f;
 constexpr float kStepHeight = 50.0f;
 constexpr float kGravity = 800.0f;     // world units / s^2
 
+// Half-extent of the distant-terrain ring, in cells: 32 cells is a little under
+// two kilometres, which is as far as the fog lets anything be seen.
+constexpr int kFarRadiusCells = 32;
+constexpr const char* kFarMeshKey = "far_terrain";
+
 // Stable key for a cell's terrain mesh, from its grid coordinate.
 uint64_t gridKey(int gx, int gy) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(gx)) << 32) |
@@ -43,6 +48,42 @@ uint64_t gridKey(int gx, int gy) {
 
 std::string terrainMeshKey(int gx, int gy) {
     return "terrain_" + std::to_string(gx) + "_" + std::to_string(gy);
+}
+
+// Blend layers of a cell's terrain, keyed alongside the base mesh.
+std::string terrainLayerKey(int gx, int gy, size_t layer) {
+    return "terrain_" + std::to_string(gx) + "_" + std::to_string(gy) + "_l" +
+           std::to_string(layer);
+}
+
+// World-space AABB of a local AABB under a transform (the box's eight corners).
+Aabb transformBounds(const Mat4& m, const Aabb& local) {
+    Aabb world;
+    if (!local.valid()) return world;
+    for (int i = 0; i < 8; i++) {
+        const Vec3 corner{(i & 1) != 0 ? local.mx.x : local.mn.x,
+                          (i & 2) != 0 ? local.mx.y : local.mn.y,
+                          (i & 4) != 0 ? local.mx.z : local.mn.z};
+        world.add(transformPoint(m, corner));
+    }
+    return world;
+}
+
+// Bounding sphere that just contains an AABB, for frustum culling.
+void boundsToSphere(const Aabb& b, Vec3& center, float& radius) {
+    center = Vec3{(b.mn.x + b.mx.x) * 0.5f, (b.mn.y + b.mx.y) * 0.5f,
+                  (b.mn.z + b.mx.z) * 0.5f};
+    const Vec3 d{b.mx.x - b.mn.x, b.mx.y - b.mn.y, b.mx.z - b.mn.z};
+    radius = 0.5f * std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+}
+
+// Local-space AABB of a mesh, computed fresh. Terrain meshes are rebuilt per
+// stream (and the allocator reuses their addresses), so they must not go through
+// the pointer-keyed cache that model meshes use.
+Aabb localBounds(const Mesh& mesh) {
+    Aabb b;
+    for (const Vertex& v : mesh.vertices) b.add(Vec3{v.x, v.y, v.z});
+    return b;
 }
 
 }  // namespace
@@ -100,6 +141,22 @@ bool Game::init(const GameOptions& opt, std::string* err) {
     }
     std::printf("skyrim: %zu instances, %zu colliders, spawn z=%.0f\n", m_draw.size(),
                 m_colliders.size(), m_player.pos.z);
+    // Point the fog at the streamed extent: the world then fades into the sky
+    // where the streamed cells actually run out, instead of showing a hard edge
+    // (range too short) or dissolving into a distant void (range too long).
+    // Point the fog at the distant ring, not at the streamed cells: aiming it at
+    // the stream would crush the view into a foggy bubble a couple of hundred
+    // metres wide and hide the landscape the ring exists to show. Without a ring
+    // (interiors, a worldspace with no terrain) fall back to the stream extent.
+    if (m_far != nullptr) {
+        const float farExtent = static_cast<float>(kFarRadiusCells) * kCellSize;
+        m_renderer.setFog(farExtent * 0.35f, farExtent * 1.05f);
+    } else {
+        const float streamExtent = (static_cast<float>(m_opt.radius) + 0.5f) * kCellSize;
+        m_renderer.setFog(streamExtent * 0.45f, streamExtent * 1.1f);
+    }
+    m_renderer.setExposure(m_opt.exposure);
+
     reportContent();
     return true;
 }
@@ -156,6 +213,23 @@ IDirect3DTexture9* Game::loadTexture(const std::string& texPath) {
             if (data.empty()) continue;
             Image img;
             if (decodeDDS(data.data(), data.size(), img, nullptr) && img.valid()) {
+                // Remember the mean colour of the texture. The distant terrain
+                // paints itself with these instead of the textures themselves,
+                // so a mountain two kilometres away still reads as the same
+                // ground the streamed cells show in detail.
+                const size_t px = img.rgba.size() / 4;
+                if (px > 0) {
+                    double sr = 0.0, sg = 0.0, sb = 0.0;
+                    for (size_t p = 0; p < px; p++) {
+                        sr += img.rgba[p * 4 + 0];
+                        sg += img.rgba[p * 4 + 1];
+                        sb += img.rgba[p * 4 + 2];
+                    }
+                    const double inv = 1.0 / (static_cast<double>(px) * 255.0);
+                    m_texColor[key] = {static_cast<float>(sr * inv),
+                                       static_cast<float>(sg * inv),
+                                       static_cast<float>(sb * inv)};
+                }
                 result = m_renderer.uploadTexture(key, img);
                 break;
             }
@@ -172,18 +246,56 @@ IDirect3DTexture9* Game::loadTexture(const std::string& texPath) {
     return result;
 }
 
+bool Game::meshBounds(const Mesh* mesh, Aabb& out) {
+    if (mesh == nullptr) return false;
+    auto it = m_meshBounds.find(mesh);
+    if (it == m_meshBounds.end()) {
+        Aabb local;
+        for (const Vertex& v : mesh->vertices) local.add(Vec3{v.x, v.y, v.z});
+        it = m_meshBounds.emplace(mesh, local).first;
+    }
+    out = it->second;
+    return out.valid();
+}
+
 void Game::reportContent() const {
     // Count submeshes the frame will actually draw, split by whether they got a
-    // real texture or fall through to the flat fallback colour.
-    size_t subTextured = 0, subFlat = 0, subEmpty = 0;
+    // real texture or fall through to the flat fallback colour, and tally the
+    // material features that decide how they are shaded.
+    size_t subTextured = 0, subFlat = 0, subEmpty = 0, subVertexColor = 0, subBlend = 0;
+    size_t subTest = 0;
+    size_t blendedItems = 0, terrainItems = 0, terrainLayerItems = 0, blendedModels = 0;
+    size_t subColors = 0;
+    double tintSum = 0.0;
+    size_t tintCount = 0, tintDark = 0, tintNearWhite = 0;
     for (const DrawItem& d : m_draw) {
         if (d.mesh == nullptr) continue;
+        if (d.blend) ++blendedItems;
+        if (d.terrain) {
+            ++terrainItems;
+            if (d.blend) ++terrainLayerItems;
+        } else if (d.blend) {
+            ++blendedModels;
+        }
         for (size_t i = 0; i < d.mesh->submeshes.size(); i++) {
-            if (d.mesh->submeshes[i].indexCount == 0) continue;
+            const Submesh& sm = d.mesh->submeshes[i];
+            if (sm.indexCount == 0) continue;
+            if (sm.vertexColors != 0) ++subVertexColor;
+            if (sm.colorsPresent != 0) ++subColors;
+            if (sm.colorsPresent != 0) {
+                const double t = (static_cast<double>(sm.fallbackR) + sm.fallbackG +
+                                  sm.fallbackB) / 3.0;
+                tintSum += t;
+                ++tintCount;
+                if (t < 0.55) ++tintDark;
+                if (t >= 0.99) ++tintNearWhite;
+            }
+            if (sm.alphaBlend != 0) ++subBlend;
+            if (sm.alphaTest != 0) ++subTest;
             const bool haveTex = i < d.textures.size() && d.textures[i] != nullptr;
             if (haveTex) {
                 ++subTextured;
-            } else if (d.mesh->submeshes[i].texturePath.empty()) {
+            } else if (sm.texturePath.empty()) {
                 ++subEmpty;
             } else {
                 ++subFlat;
@@ -193,6 +305,30 @@ void Game::reportContent() const {
     std::printf("skyrim: textures %zu/%zu resolved (%zu missing), submeshes %zu textured, "
                 "%zu untextured (no path), %zu failed to load\n",
                 m_texLoaded, m_texRequested, m_texMissing, subTextured, subEmpty, subFlat);
+    std::printf("skyrim: %zu instances (%zu blended: %zu terrain layers + %zu models), "
+                "%zu submeshes carry vertex colour (%zu applied), %zu blend, %zu alpha-test\n",
+                m_draw.size(), blendedItems, terrainLayerItems, blendedModels, subColors,
+                subVertexColor, subBlend, subTest);
+    std::printf("skyrim: %zu terrain items over %zu cached cells\n", terrainItems,
+                m_terrain.size());
+    if (tintCount > 0) {
+        std::printf("skyrim: vertex-colour tints: mean %.3f over %zu, %zu dark(<0.55), "
+                    "%zu white(>=0.99)\n",
+                    tintSum / static_cast<double>(tintCount), tintCount, tintDark, tintNearWhite);
+    }
+    size_t bitCount[16] = {};
+    for (const DrawItem& d : m_draw) {
+        if (d.mesh == nullptr) continue;
+        for (const Submesh& sm : d.mesh->submeshes) {
+            if (sm.indexCount == 0) continue;
+            for (int b = 0; b < 16; b++) {
+                if ((sm.shaderFlags1 & (1u << b)) != 0) ++bitCount[b];
+            }
+        }
+    }
+    std::printf("skyrim: shaderFlags1 usage:");
+    for (int b = 0; b < 16; b++) std::printf(" %d:%zu", b, bitCount[b]);
+    std::printf("\n");
     for (const std::string& s : m_missingSample) {
         std::printf("skyrim:   missing texture: %s\n", s.c_str());
     }
@@ -203,7 +339,7 @@ void Game::buildCell(int gx, int gy, std::vector<DrawItem>& out) {
     if (cell == nullptr) return;
 
     // Terrain first, so it sits under everything placed on it.
-    if (cell->land.present) {
+    if (cell->land.present && !cell->isInterior) {
         auto& slot = m_terrain[gridKey(gx, gy)];
         if (!slot) {
             auto mesh = std::make_unique<Mesh>();
@@ -223,8 +359,39 @@ void Game::buildCell(int gx, int gy, std::vector<DrawItem>& out) {
                 for (const Submesh& sm : slot->submeshes) {
                     item.textures.push_back(loadTexture(sm.texturePath));
                 }
+                item.bounds = localBounds(*item.mesh);
+                boundsToSphere(item.bounds, item.center, item.radius);
                 out.push_back(std::move(item));
             }
+        }
+
+        // Blend layers over the base so the ground fades between land textures
+        // instead of switching hard at a quadrant border.
+        auto& layers = m_terrainLayers[gridKey(gx, gy)];
+        if (layers.empty()) {
+            std::vector<Mesh> built;
+            if (buildTerrainLayers(*cell, m_resolver, built)) {
+                layers.reserve(built.size());
+                for (Mesh& m : built) {
+                    layers.push_back(std::make_unique<Mesh>(std::move(m)));
+                }
+            }
+        }
+        for (size_t k = 0; k < layers.size(); k++) {
+            const Mesh* lm = layers[k].get();
+            Renderer::GpuMesh* gpu = m_renderer.uploadMesh(terrainLayerKey(gx, gy, k), *lm);
+            if (gpu == nullptr) continue;
+            DrawItem item;
+            item.mesh = lm;
+            item.gpu = gpu;
+            item.terrain = true;
+            item.blend = true;
+            if (!lm->submeshes.empty()) {
+                item.textures.push_back(loadTexture(lm->submeshes[0].texturePath));
+            }
+            item.bounds = localBounds(*lm);
+            boundsToSphere(item.bounds, item.center, item.radius);
+            out.push_back(std::move(item));
         }
     }
 
@@ -241,24 +408,85 @@ void Game::buildCell(int gx, int gy, std::vector<DrawItem>& out) {
         item.textures.reserve(mesh->submeshes.size());
         for (const Submesh& sm : mesh->submeshes) {
             item.textures.push_back(loadTexture(sm.texturePath));
+            if (sm.alphaBlend != 0) item.blend = true;
+        }
+        Aabb local;
+        if (meshBounds(mesh, local)) {
+            item.bounds = transformBounds(item.world, local);
+            boundsToSphere(item.bounds, item.center, item.radius);
         }
         out.push_back(std::move(item));
     }
 }
 
+void Game::buildFarMesh(int gx, int gy) {
+    // Rebuilt on every stream: the ring's hole has to follow the streamed cells,
+    // and a few thousand height samples cost nothing next to the frame it saves.
+    m_renderer.releaseMesh(kFarMeshKey);
+    m_far.reset();
+
+    FarTerrainOptions opt;
+    opt.radiusCells = kFarRadiusCells;
+    opt.holeRadiusCells = m_opt.radius;
+    opt.landAt = [this](int cx, int cy) -> const Land* {
+        const Cell* cell = m_cells.findCell(m_opt.worldspace, cx, cy);
+        if (cell == nullptr || cell->isInterior || !cell->land.present) return nullptr;
+        return &cell->land;
+    };
+    opt.colorOf = [this](const std::string& path, float& r, float& g, float& b) {
+        loadTexture(path);   // resolves and decodes it the first time it is seen
+        const auto it = m_texColor.find(normalizePath(path));
+        if (it == m_texColor.end()) return false;
+        r = it->second[0];
+        g = it->second[1];
+        b = it->second[2];
+        return true;
+    };
+
+    auto mesh = std::make_unique<Mesh>();
+    if (!buildFarTerrain(gx, gy, m_resolver, opt, *mesh) || !mesh->valid()) return;
+    Renderer::GpuMesh* gpu = m_renderer.uploadMesh(kFarMeshKey, *mesh);
+    if (gpu == nullptr) return;
+    m_far = std::move(mesh);
+
+    DrawItem item;
+    item.mesh = m_far.get();
+    item.gpu = gpu;
+    item.terrain = true;    // ground, and never a collider: it spans kilometres
+    item.textures.resize(m_far->submeshes.size(), nullptr);
+    item.bounds = localBounds(*item.mesh);
+    boundsToSphere(item.bounds, item.center, item.radius);
+    m_draw.push_back(std::move(item));
+}
+
 void Game::rebuildStream(float centerX, float centerY) {
+    const auto t0 = std::chrono::steady_clock::now();
     m_draw.clear();
     m_terrain.clear();
+    m_terrainLayers.clear();
     const int gx = static_cast<int>(std::floor(centerX / kCellSize));
     const int gy = static_cast<int>(std::floor(centerY / kCellSize));
     m_centerGx = gx;
     m_centerGy = gy;
+    // The ring goes in first: it is the view to the horizon, and drawing it
+    // before the streamed cells keeps the near detail on top of it.
+    buildFarMesh(gx, gy);
+    const auto t1 = std::chrono::steady_clock::now();
     for (int dy = -m_opt.radius; dy <= m_opt.radius; dy++) {
         for (int dx = -m_opt.radius; dx <= m_opt.radius; dx++) {
             buildCell(gx + dx, gy + dy, m_draw);
         }
     }
     updateColliders();
+    const auto t2 = std::chrono::steady_clock::now();
+    // A stream rebuild happens whenever the player crosses a cell, so its cost
+    // is the hitch they feel while walking. Keep it in sight.
+    const double farMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    const double cellMs = std::chrono::duration<double, std::milli>(t2 - t1).count();
+    std::printf("skyrim: stream at (%d %d): %d cells in %.1f ms (far ring %.1f ms, "
+                "%zu items)\n",
+                gx, gy, (2 * m_opt.radius + 1) * (2 * m_opt.radius + 1), farMs + cellMs,
+                farMs, m_draw.size());
 }
 
 void Game::updateColliders() {
@@ -266,28 +494,14 @@ void Game::updateColliders() {
     m_colliders.reserve(m_draw.size());
     bool have = false;
     float floorZ = 0.0f;
+    // buildCell already worked out each item's world bounds, so this is just a
+    // gather rather than another eight-corner transform per instance.
     for (const DrawItem& d : m_draw) {
         if (d.terrain) continue;   // terrain is a surface, not a box
-        Aabb local;
-        auto it = m_meshBounds.find(d.mesh);
-        if (it == m_meshBounds.end()) {
-            for (const Vertex& v : d.mesh->vertices) local.add(Vec3{v.x, v.y, v.z});
-            it = m_meshBounds.emplace(d.mesh, local).first;
-        }
-        local = it->second;
-        if (!local.valid()) continue;
-
-        Aabb world;
-        for (int i = 0; i < 8; i++) {
-            const Vec3 corner{(i & 1) != 0 ? local.mx.x : local.mn.x,
-                              (i & 2) != 0 ? local.mx.y : local.mn.y,
-                              (i & 4) != 0 ? local.mx.z : local.mn.z};
-            world.add(transformPoint(d.world, corner));
-        }
-        if (!world.valid()) continue;
-        m_colliders.push_back(world);
-        if (!have || world.mn.z < floorZ) {
-            floorZ = world.mn.z;
+        if (!d.bounds.valid()) continue;
+        m_colliders.push_back(d.bounds);
+        if (!have || d.bounds.mn.z < floorZ) {
+            floorZ = d.bounds.mn.z;
             have = true;
         }
     }
@@ -473,6 +687,7 @@ int Game::run() {
         }
 
         if (m_renderer.beginFrame()) {
+            const auto renderT0 = clock::now();
             const float aspect =
                 static_cast<float>(m_renderer.width()) / static_cast<float>(m_renderer.height());
             const float fov = m_opt.fovDeg * 3.14159265f / 180.0f;
@@ -481,9 +696,38 @@ int Game::run() {
             const Mat4 view = lookAtLH(eye, eye + cameraForward(), Vec3{0.0f, 0.0f, 1.0f});
             m_renderer.setCamera(view, proj);
             m_renderer.drawSky(eye);
-            for (const DrawItem& d : m_draw) {
-                m_renderer.drawMesh(d.gpu, *d.mesh, d.world, d.textures);
+
+            // Cull to the view frustum, then split into the opaque pass and the
+            // blended pass. Opaque geometry goes first so terrain layers and
+            // translucent materials blend over finished ground; blended items are
+            // sorted back-to-front because they share the depth buffer.
+            const Frustum frustum = frustumFromViewProj(multiply(view, proj));
+            m_opaque.clear();
+            m_blended.clear();
+            for (DrawItem& d : m_draw) {
+                if (!sphereInFrustum(frustum, d.center, d.radius)) continue;
+                if (d.blend) {
+                    m_blended.push_back(&d);
+                } else {
+                    m_opaque.push_back(&d);
+                }
             }
+            std::sort(m_blended.begin(), m_blended.end(),
+                      [&](const DrawItem* a, const DrawItem* b) {
+                          const Vec3 da = a->center - eye;
+                          const Vec3 db = b->center - eye;
+                          return dot(da, da) > dot(db, db);
+                      });
+            for (const DrawItem* d : m_opaque) {
+                m_renderer.drawMesh(d->gpu, *d->mesh, d->world, d->textures);
+            }
+            for (const DrawItem* d : m_blended) {
+                m_renderer.drawMesh(d->gpu, *d->mesh, d->world, d->textures);
+            }
+            m_lastVisible = m_opaque.size() + m_blended.size();
+            m_frameMs +=
+                std::chrono::duration<double, std::milli>(clock::now() - renderT0).count();
+            ++m_frameCount;
             m_renderer.endScene();
 
             ++frame;
@@ -501,7 +745,11 @@ int Game::run() {
         if (m_opt.maxFrames > 0 && frame >= m_opt.maxFrames) break;
     }
     if (m_opt.maxFrames > 0) {
-        std::printf("skyrim: rendered %d frames, exiting\n", frame);
+        const double avgMs = m_frameCount > 0 ? m_frameMs / static_cast<double>(m_frameCount) : 0.0;
+        std::printf("skyrim: rendered %d frames, %zu items visible, %.2f ms/frame (%.0f fps), "
+                    "%zu draw calls\n",
+                    frame, m_lastVisible, avgMs,
+                    avgMs > 0.0 ? 1000.0 / avgMs : 0.0, m_renderer.drawCalls());
     }
     return 0;
 }
@@ -509,6 +757,9 @@ int Game::run() {
 void Game::shutdown() {
     m_draw.clear();
     m_terrain.clear();
+    m_terrainLayers.clear();
+    m_opaque.clear();
+    m_blended.clear();
     m_colliders.clear();
     m_texCache.clear();
     m_meshBounds.clear();

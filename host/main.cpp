@@ -37,7 +37,7 @@ struct Args {
     uint32_t worldspace = 0x0000003C;
     int gridX = 0;
     int gridY = 0;
-    int radius = 1;
+    int radius = 4;
     int width = 1280;
     int height = 720;
     int frames = 0;
@@ -46,6 +46,7 @@ struct Args {
     float camX = 0.0f, camY = 0.0f, camZ = 0.0f;
     float lookYaw = 0.0f, lookPitch = 0.0f;
     float fov = 68.0f;
+    float exposure = 1.8f;
 };
 
 Args parseArgs(int argc, char** argv) {
@@ -85,6 +86,8 @@ Args parseArgs(int argc, char** argv) {
             a.lookPitch = static_cast<float>(std::atof(argv[++i]));
         } else if (k == "--fov" && i + 1 < argc) {
             a.fov = static_cast<float>(std::atof(argv[++i]));
+        } else if (k == "--exposure" && i + 1 < argc) {
+            a.exposure = static_cast<float>(std::atof(argv[++i]));
         } else if (k == "--types") {
             a.listTypes = true;
         } else if (k == "--limit" && i + 1 < argc) {
@@ -101,7 +104,7 @@ Args parseArgs(int argc, char** argv) {
                 "  --play           launch the windowed, playable world\n"
                 "  --ws <hex>       worldspace FormID for --play (default 3C = Tamriel)\n"
                 "  --grid <x> <y>   starting exterior cell for --play\n"
-                "  --radius <n>     cells streamed around the player (default 1)\n"
+                "  --radius <n>     cells streamed around the player (default 4)\n"
                 "  --meshes <bsa>   archive to load meshes/textures from (repeatable;\n"
                 "                   default: every *.bsa in the data folder)\n"
                 "  --width/--height window size for --play\n"
@@ -109,7 +112,8 @@ Args parseArgs(int argc, char** argv) {
                 "  --shot <file>    save the final frame as a BMP\n"
                 "  --cam <x> <y> <z> place a fixed camera (implies no simulation)\n"
                 "  --look <yawDeg> <pitchDeg>  fixed camera angles with --cam\n"
-                "  --fov <deg>      vertical field of view (default 68)\n");
+                "  --fov <deg>      vertical field of view (default 68)\n"
+                "  --exposure <n>   post-lighting gain, 1..2 (default 1.8)\n");
             std::exit(0);
         }
     }
@@ -167,6 +171,7 @@ int main(int argc, char** argv) {
         engine.lookYawDeg = args.lookYaw;
         engine.lookPitchDeg = args.lookPitch;
         engine.fovDeg = args.fov;
+        engine.exposure = args.exposure;
         return skyrim::host::runEngine(engine);
     }
 

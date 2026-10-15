@@ -49,6 +49,7 @@ int main(int argc, char** argv) {
     bool haveWs = false;
     FormID wantWs = 0;
     int wantX = 0, wantY = 0, haveGrid = 0;
+    bool landStats = false;
     for (int i = 2; i < argc; i++) {
         const std::string k = argv[i];
         if (k == "--meshes" && i + 1 < argc) {
@@ -60,6 +61,8 @@ int main(int argc, char** argv) {
             wantX = std::atoi(argv[++i]);
             wantY = std::atoi(argv[++i]);
             haveGrid = 2;
+        } else if (k == "--landstats") {
+            landStats = true;
         }
     }
 
@@ -82,6 +85,52 @@ int main(int argc, char** argv) {
 
     std::printf("forms=%zu cells=%zu refs=%zu\n", db.formCount(), cells.cellCount(),
                 cells.totalObjectCount());
+
+    if (landStats) {
+        size_t withLand = 0, withLayers = 0, withWeights = 0;
+        size_t totalLayers = 0, maxLayers = 0;
+        size_t totalWeights = 0, maxWeights = 0;
+        size_t layerHist[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+        size_t bytesWeights = 0;
+        size_t minPos = 0xFFFF, maxPos = 0, posOverQuadrant = 0;
+        size_t maxLayerWeights = 0;
+        for (const Cell& c : cells.cells()) {
+            if (c.isInterior || !c.land.present) continue;
+            ++withLand;
+            const size_t nl = c.land.layers.size();
+            if (nl > 0) ++withLayers;
+            layerHist[nl < 8 ? nl : 8]++;
+            totalLayers += nl;
+            if (nl > maxLayers) maxLayers = nl;
+            size_t w = 0;
+            for (const LandLayer& l : c.land.layers) {
+                w += l.weights.size();
+                if (l.weights.size() > maxLayerWeights) maxLayerWeights = l.weights.size();
+                for (const LandVertexWeight& vw : l.weights) {
+                    if (vw.index < minPos) minPos = vw.index;
+                    if (vw.index > maxPos) maxPos = vw.index;
+                    if (vw.index >= 289) ++posOverQuadrant;
+                }
+            }
+            if (w > 0) ++withWeights;
+            totalWeights += w;
+            if (w > maxWeights) maxWeights = w;
+            bytesWeights += w * sizeof(LandVertexWeight);
+        }
+        std::printf("land: weight vertex index min=%zu max=%zu  entries>=289: %zu  max per layer=%zu\n",
+                    minPos, maxPos, posOverQuadrant, maxLayerWeights);
+        std::printf("land: %zu cells with terrain, %zu carry layers, %zu carry weights\n",
+                    withLand, withLayers, withWeights);
+        std::printf("land: layers total=%zu max=%zu  weights total=%zu max=%zu (%.1f MB)\n",
+                    totalLayers, maxLayers, totalWeights, maxWeights,
+                    static_cast<double>(bytesWeights) / (1024.0 * 1024.0));
+        std::printf("land: layers-per-cell histogram:");
+        for (size_t i = 0; i < 9; i++) {
+            if (layerHist[i] != 0) std::printf(" %zu:%zu", i, layerHist[i]);
+        }
+        std::printf("\n");
+        if (meshes.empty()) return 0;
+    }
 
     // Choose the cell to inspect.
     const Cell* cell = nullptr;

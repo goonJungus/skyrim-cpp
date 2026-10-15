@@ -285,6 +285,16 @@ bool parseGeomData(const Nif& nif, size_t bi, GeomData& out) {
         } else {
             v.u = 0.0f; v.v = 0.0f;
         }
+        if (hasColors) {
+            // Color4 is four floats. Skyrim bakes shading (AO, dirt, tint) into
+            // these, so they are worth keeping per vertex rather than as an
+            // average; a flat average loses the shape they describe.
+            const size_t co = cpos + static_cast<size_t>(i) * 16;
+            v.r = std::clamp(f32(d, co), 0.0f, 1.0f);
+            v.g = std::clamp(f32(d, co + 4), 0.0f, 1.0f);
+            v.b = std::clamp(f32(d, co + 8), 0.0f, 1.0f);
+            v.a = std::clamp(f32(d, co + 12), 0.0f, 1.0f);
+        }
         out.verts.push_back(v);
     }
 
@@ -422,23 +432,52 @@ std::string resolveTexture(const Nif& nif, size_t shaderBi) {
     return {};
 }
 
-bool resolveAlphaTest(const Nif& nif, size_t shapeBi) {
+// NiAlphaProperty flags: bit 0 enables blending, bit 9 (0x200) enables testing.
+// Skyrim uses both at once over foliage (cutout then blend) and either alone; the
+// 16-bit value sits twelve bytes into the property block.
+//
+// A shape reaches its properties through a list of block references, but the
+// offset of that list is not fixed: it trails the geometry, skin and shader
+// references, so it moves with the shape flavour and the length of the name. It
+// is also not word aligned in this game's files. Scanning the block for the first
+// reference that names a NiAlphaProperty sidesteps all of that, and the type
+// check makes a coincidental match very unlikely.
+void resolveAlpha(const Nif& nif, size_t shapeBi, uint32_t& test, uint32_t& blend) {
+    test = 0;
+    blend = 0;
+    if (shapeBi >= nif.blockCount()) return;
     const size_t boff = nif.offsets[shapeBi];
-    const size_t bsz = nif.blockSizes[shapeBi];
-    if (bsz < 74) return false;
-    const uint32_t nprop = u32(nif.data, boff + 66);
-    if (nprop > 16) return false;
-    for (uint32_t k = 0; k < nprop; k++) {
-        const size_t o = boff + 70 + static_cast<size_t>(k) * 4;
-        if (o + 4 > nif.size) break;
-        const uint32_t pr = u32(nif.data, o);
-        if (pr >= nif.blockCount() || nif.typeName(pr) != "NiAlphaProperty") continue;
+    if (boff >= nif.size) return;
+    size_t bsz = nif.blockSizes[shapeBi];
+    if (bsz > nif.size - boff) bsz = nif.size - boff;
+    if (bsz < 16) return;
+    for (size_t p = 4; p + 4 <= bsz; p++) {
+        const uint32_t pr = u32(nif.data, boff + p);
+        if (pr >= nif.blockCount()) continue;
+        if (nif.typeName(pr) != "NiAlphaProperty") continue;
         const size_t poff = nif.offsets[pr];
-        if (nif.blockSizes[pr] < 14 || poff + 14 > nif.size) continue;
+        if (nif.blockSizes[pr] < 15 || poff + 15 > nif.size) continue;
         const uint16_t flags = u16(nif.data, poff + 12);
-        if ((flags & 0x200) && !(flags & 0x001)) return true;
+        if ((flags & 0x0200u) != 0) test = 1;
+        if ((flags & 0x0001u) != 0) blend = 1;
+        return;  // the first alpha property is the shape's
     }
-    return false;
+}
+
+// BSLightingShaderProperty stores Shader Flags 1 and 2, then the UV offset and
+// scale, then the texture-set reference that resolveTexture() reads. That puts
+// Shader Flags 1 sixteen bytes before the texture set, so at so + 16. Skyrim's
+// lighting shader always multiplies a mesh's vertex colours into the lit
+// result; only the alpha component is optional, and SLSF1_Vertex_Alpha is what
+// asks for it.
+constexpr uint32_t kSLS1VertexAlpha = 0x00000008u;
+
+uint32_t lightingShaderFlags1(const Nif& nif, size_t shaderBi) {
+    if (shaderBi >= nif.blockCount()) return 0;
+    if (nif.typeName(shaderBi) != "BSLightingShaderProperty") return 0;
+    const size_t so = nif.offsets[shaderBi];
+    if (nif.blockSizes[shaderBi] < 44 || so + 20 > nif.size) return 0;
+    return u32(nif.data, so + 16);
 }
 
 // Recover a shape -> geometry-data reference. Prefer the canonical offset, then
@@ -597,11 +636,26 @@ bool loadNif(const uint8_t* data, size_t size, Mesh& out, std::string* error) {
         out.vertices.insert(out.vertices.end(), s.geom.verts.begin(), s.geom.verts.end());
         for (uint32_t idx : s.geom.tris) out.indices.push_back(vbase + idx);
 
+        const uint32_t flags1 = lightingShaderFlags1(nif, s.shaderBi);
+        // Skyrim's lighting shader always multiplies a mesh's vertex colours into
+        // the lit result -- they carry baked shading and tint -- so only the alpha
+        // component is optional, and SLSF1_Vertex_Alpha is what asks for it. A
+        // mesh with no colours is already neutral white.
+        const bool useVertexAlpha = s.geom.hasColors && (flags1 & kSLS1VertexAlpha) != 0;
+        if (!useVertexAlpha) {
+            for (size_t vi = vbase; vi < out.vertices.size(); vi++) {
+                out.vertices[vi].a = 1.0f;
+            }
+        }
+
         Submesh sm;
         sm.indexStart = istart;
         sm.indexCount = static_cast<uint32_t>(out.indices.size()) - istart;
         sm.texturePath = resolveTexture(nif, s.shaderBi);
-        sm.alphaTest = resolveAlphaTest(nif, s.shapeBi) ? 1u : 0u;
+        resolveAlpha(nif, s.shapeBi, sm.alphaTest, sm.alphaBlend);
+        sm.vertexColors = s.geom.hasColors ? 1u : 0u;
+        sm.colorsPresent = s.geom.hasColors ? 1u : 0u;
+        sm.shaderFlags1 = flags1;
         if (s.geom.hasColors) {
             sm.fallbackR = std::clamp(s.geom.avgR, 0.0f, 1.0f);
             sm.fallbackG = std::clamp(s.geom.avgG, 0.0f, 1.0f);

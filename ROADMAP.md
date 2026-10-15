@@ -17,9 +17,10 @@ changing anything here, run `python scripts/progress.py` to refresh the README.
 
 - [x] Cell hierarchy and spatial index (interiors, exteriors, persistent cells) (w 2)
 - [x] Cell to placed models to meshes pipeline (`MODL` → archive → mesh) (w 2)
-- [~] Cell streaming around the player (3×3 grid streams; no LOD swaps or unloading yet) (w 2)
+- [~] Cell streaming around the player (configurable grid; no unloading or LOD objects yet) (w 2)
 - [x] Terrain: `LAND` heightmaps (`VHGT`) and walkable ground (w 2)
 - [~] Land layer textures: per-quadrant `ATXT`/`BTXT` selection, no per-vertex blending yet (w 1)
+- [x] Distant terrain: coarse `LAND` ring out to the horizon, one draw call, no textures (w 2)
 - [ ] Interiors: doors, portals and interior lighting (w 2)
 - [ ] Water (w 1)
 - [ ] Weather, sky and time of day (w 2)
@@ -27,6 +28,7 @@ changing anything here, run `python scripts/progress.py` to refresh the README.
 ## Playing
 
 - [x] Direct3D 9 renderer: lit, textured, alpha cutout (w 2)
+- [x] Daylight: sun, sky fill, post-lighting exposure and fog out to the far terrain (w 2)
 - [x] First-person controller: gravity, collision, walk and fly (w 2)
 - [ ] Collision from real geometry (triangles, not bounding boxes) (w 3)
 - [ ] Third-person camera (w 1)

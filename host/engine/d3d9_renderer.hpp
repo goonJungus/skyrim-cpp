@@ -36,12 +36,17 @@
 
 namespace skyrim::host {
 
-// The vertex layout the renderer uploads: position, normal, texture coordinate.
-constexpr DWORD kVertexFvf = D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_TEX1;
+// The vertex layout the renderer uploads: position, normal, a packed diffuse
+// colour (the NIF vertex colour for models, the layer opacity for terrain), and
+// one texture coordinate. The diffuse stage carries the blend weight, so the
+// per-vertex float colour the library produces is packed to ARGB on upload.
+constexpr DWORD kVertexFvf =
+    D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_DIFFUSE | D3DFVF_TEX1;
 
 struct RtVertex {
     float x = 0.0f, y = 0.0f, z = 0.0f;
     float nx = 0.0f, ny = 1.0f, nz = 0.0f;
+    DWORD diffuse = 0xFFFFFFFFu;
     float u = 0.0f, v = 0.0f;
 };
 
@@ -86,10 +91,30 @@ public:
     // failure. The returned pointer is stable until shutdown().
     GpuMesh* uploadMesh(const std::string& key, const Mesh& mesh);
 
+    // Drops a uploaded mesh so a later uploadMesh() with the same key uploads the
+    // new geometry. Used by meshes that are rebuilt as the player moves.
+    void releaseMesh(const std::string& key);
+
+    // Distance fog range, in world units. The game points this at the streamed
+    // extent so the world dissolves into the sky at its real edge rather than
+    // ending in a hard line out in the open.
+    void setFog(float start, float end);
+
+    // Scalar applied to lit world geometry after the lighting clamp, standing in
+    // for the tone-map exposure the original engine runs. The scene's albedo is
+    // dark (land textures average 0.15-0.45), so lighting alone cannot lift it
+    // past its own albedo; this is what makes daylight read as daylight. Values
+    // are clamped to [1, 2]; the sky is deliberately left unexposed.
+    void setExposure(float exposure);
+
     // Draws every submesh of `mesh` at `world`. `textures` is indexed in
     // parallel with mesh.submeshes; a null entry uses a flat white texture.
+    // Alpha test / blend come from each submesh's own flags.
     void drawMesh(GpuMesh* gpu, const Mesh& mesh, const Mat4& world,
                   const std::vector<IDirect3DTexture9*>& textures);
+
+    // Number of DrawIndexedPrimitive calls issued since beginFrame().
+    size_t drawCalls() const { return m_drawCalls; }
 
     // Uploads (once, keyed by `key`) a decoded image as a managed texture.
     IDirect3DTexture9* uploadTexture(const std::string& key, const Image& img);
@@ -119,6 +144,11 @@ private:
     int m_width = 0;
     int m_height = 0;
     bool m_closed = false;
+    size_t m_drawCalls = 0;
+    float m_fogStart = 26000.0f;
+    float m_fogEnd = 135000.0f;
+    float m_exposure = 1.8f;
+    D3DCOLOR m_exposureFactor = 0;
     std::string m_err;
 
     std::unordered_map<std::string, GpuMesh> m_meshes;

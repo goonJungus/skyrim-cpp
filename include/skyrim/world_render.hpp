@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -66,6 +67,51 @@ std::vector<PlacedModel> instancesForCell(const Cell& cell,
 // carries the base land texture's diffuse path (empty when unresolved).
 // Returns false when the cell has no terrain (interiors, or a missing LAND).
 bool buildTerrainMesh(const Cell& cell, const ModelResolver& resolver, Mesh& out);
+
+// Terrain blend layers for an exterior cell. Each returned mesh is the cell's
+// full 33x33 grid restricted to one quadrant, with the layer's per-vertex
+// opacity in Vertex::a, so the host can draw it alpha-blended over the base
+// terrain. Layers come back in the order they must be composited (bottom first)
+// and at most kMaxTerrainLayers are returned -- the heaviest, since a cell can
+// carry two dozen that mostly cover a few vertices each. Empty when the cell has
+// no layered terrain.
+constexpr size_t kMaxTerrainLayers = 3;
+bool buildTerrainLayers(const Cell& cell, const ModelResolver& resolver,
+                        std::vector<Mesh>& out);
+
+// Distant terrain: one coarse mesh that carries the whole visible landscape, so
+// an open view costs a single draw call instead of streaming every cell out to
+// the horizon.
+//
+// Every cell's heightmap is already in memory, so the far ground is sampled on
+// cell corners -- one vertex per 4096 units instead of one per 128 -- and each
+// vertex carries the colour of the land texture under it. That is what makes a
+// mountain three kilometres away read as rock or snow without its texture.
+//
+// The near terrain covers the cells around the player, so the builder leaves a
+// hole for it and emits only the ring around it. Both meshes sample the same
+// heightmaps at shared cell corners, so they meet without a seam.
+struct FarTerrainOptions {
+    // Half-extent of the far square, in cells. 32 is a little under two km.
+    int radiusCells = 32;
+    // Cells around the centre left to the streamed terrain. This must match the
+    // stream radius used by the caller, or the two meshes will overlap. Negative
+    // keeps every quad, which is what a caller with no streamed terrain wants.
+    int holeRadiusCells = 3;
+    // Terrain of one exterior cell, or nullptr where there is none (a missing
+    // LAND, an interior, or an unloaded cell).
+    std::function<const Land*(int gridX, int gridY)> landAt;
+    // Diffuse colour of a land texture (0..1 per channel). False when the
+    // texture is unknown, where the builder falls back to a neutral tone.
+    std::function<bool(const std::string& path, float& r, float& g, float& b)> colorOf;
+};
+
+// Builds the ring of far terrain around one cell. `out` is a single submesh with
+// no texture: its colour comes entirely from its vertex colours, which the host
+// draws through its flat-tint path. Returns false when no cell around the centre
+// carries terrain.
+bool buildFarTerrain(int centerGridX, int centerGridY, const ModelResolver& resolver,
+                     const FarTerrainOptions& opt, Mesh& out);
 
 // Loads and caches meshes by model path, reading from one or more BSA archives.
 // Lookups are case-insensitive and tolerate a missing "meshes\\" prefix, since

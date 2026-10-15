@@ -18,6 +18,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "skyrim/form_database.hpp"
 
@@ -29,6 +30,24 @@ constexpr int kLandVertices = kLandEdge * kLandEdge;   // 1089
 constexpr float kLandVertexSpacing = 128.0f;           // 4096 / 32
 constexpr float kLandHeightScale = 8.0f;               // stored unit -> game units
 
+// One vertex sample of a land-texture layer: which heightmap vertex it applies
+// to and how strongly the layer shows there. VTXT stores these sparsely, so a
+// layer only carries entries for the vertices it actually covers.
+struct LandVertexWeight {
+    uint16_t index = 0;      // 0 .. kLandVertices-1
+    float opacity = 0.0f;    // 0 .. 1
+};
+
+// One land-texture layer of a cell: an ATXT entry plus the VTXT opacities that
+// belong to it. Layers composite bottom-up within a quadrant, so layer 0 is the
+// ground and higher layers blend on top of it.
+struct LandLayer {
+    FormID texture = kFormIDNull;   // LTEX the layer draws with
+    uint8_t quadrant = 0;           // 0 bottom-left, 1 bottom-right, 2 upper-left, 3 upper-right
+    uint16_t layer = 0;             // layer index inside the quadrant
+    std::vector<LandVertexWeight> weights;   // sparse, VTXT
+};
+
 // Decoded terrain for one exterior cell.
 struct Land {
     bool     present = false;
@@ -39,10 +58,20 @@ struct Land {
     // left, 3 = upper-right. Starts from BTXT and is overridden by the lowest
     // layer of each quadrant's ATXT entries. Null means "no texture known".
     std::array<FormID, 4> quadrantTexture{kFormIDNull, kFormIDNull, kFormIDNull, kFormIDNull};
+    // Every ATXT/VTXT layer, in the order the record stores them. Used to blend
+    // the ground the way the game does instead of picking one texture per
+    // quadrant. Empty for cells that only carry BTXT.
+    std::vector<LandLayer> layers;
 
     // Reconstruct the absolute height of every vertex, in game units, into
     // `out` (kLandVertices floats, row-major: out[row * kLandEdge + col]).
     void heights(float* out) const;
+
+    // Absolute heights of the four cell corners, in game units, in the order
+    // south-west, south-east, north-west, north-east. A coarse mesh that samples
+    // terrain at cell corners wants only these, and getting them this way costs
+    // a hundredth of reconstructing the full grid.
+    void corners(float* out) const;
 };
 
 // Parse a LAND record's already-decompressed payload. Returns true when a

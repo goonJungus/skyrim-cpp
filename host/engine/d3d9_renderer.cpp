@@ -42,6 +42,28 @@ D3DCOLORVALUE color(float r, float g, float b, float a) {
     return c;
 }
 
+// Pack a 0..1 float colour into the ARGB layout the fixed-function pipe reads
+// for D3DFVF_DIFFUSE.
+DWORD packColor(float r, float g, float b, float a) {
+    const auto byte = [](float v) -> DWORD {
+        const float c = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+        return static_cast<DWORD>(c * 255.0f + 0.5f);
+    };
+    return (byte(a) << 24) | (byte(r) << 16) | (byte(g) << 8) | byte(b);
+}
+
+// Tint for an untextured shape, which has to carry both its own flat colour and
+// the exposure in the texture factor. The factor is spent twice -- once as stage
+// 0's colour source, once by stage 1's doubling multiply -- so the gain is its
+// square, and this is the value whose square is the wanted E * fallback. Using
+// the square (rather than clamping fallback * exposure) is what lets a white
+// fallback still receive the full gain, which is what the distant terrain needs.
+DWORD tintScale(float v, float exposure) {
+    const float c = v * exposure * 0.5f;
+    const float t = c > 0.0f ? std::sqrt(c) : 0.0f;
+    return static_cast<DWORD>((t > 1.0f ? 1.0f : t) * 255.0f + 0.5f);
+}
+
 std::wstring widen(const std::string& s) {
     if (s.empty()) return std::wstring();
     const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()),
@@ -122,15 +144,28 @@ bool Renderer::init(int width, int height, const std::string& title, std::string
     }
 
     createSky();
+    setExposure(m_exposure);
     return true;
+}
+
+void Renderer::setFog(float start, float end) {
+    m_fogStart = start;
+    m_fogEnd = end > start ? end : start + 1.0f;
+}
+
+void Renderer::setExposure(float exposure) {
+    m_exposure = exposure < 1.0f ? 1.0f : (exposure > 2.0f ? 2.0f : exposure);
+    // The gain rides the texture-factor register at half strength, because the
+    // second texture stage doubles it back (D3DTOP_MODULATE2X).
+    const int v = static_cast<int>(m_exposure * 0.5f * 255.0f + 0.5f);
+    m_exposureFactor = D3DCOLOR_XRGB(v, v, v);
 }
 
 void Renderer::applyWorldStates() {
     m_dev->SetRenderState(D3DRS_LIGHTING, TRUE);
-    // A cool sky ambient fills surfaces the sun does not reach. It is
-    // deliberately strong: these textures carry fairly dark albedo, so shadows
-    // go black without it.
-    m_dev->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_XRGB(128, 140, 160));
+    // A cool sky ambient fills surfaces the sun does not reach, so shadows keep
+    // their shape instead of going black.
+    m_dev->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_XRGB(110, 118, 130));
     m_dev->SetRenderState(D3DRS_ZENABLE, TRUE);
     m_dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
     // Skyrim meshes are authored right-handed; with a left-handed projection the
@@ -142,24 +177,24 @@ void Renderer::applyWorldStates() {
 
     // Distance fog dissolves the streamed edge into the horizon instead of
     // ending in a hard line against the sky.
-    const float fogStart = 26000.0f;
-    const float fogEnd = 135000.0f;
     m_dev->SetRenderState(D3DRS_FOGENABLE, TRUE);
     m_dev->SetRenderState(D3DRS_FOGCOLOR, kHorizonColor);
     m_dev->SetRenderState(D3DRS_FOGTABLEMODE, D3DFOG_LINEAR);
     m_dev->SetRenderState(D3DRS_FOGVERTEXMODE, D3DFOG_LINEAR);
-    m_dev->SetRenderState(D3DRS_FOGSTART, *reinterpret_cast<const DWORD*>(&fogStart));
-    m_dev->SetRenderState(D3DRS_FOGEND, *reinterpret_cast<const DWORD*>(&fogEnd));
+    m_dev->SetRenderState(D3DRS_FOGSTART, *reinterpret_cast<const DWORD*>(&m_fogStart));
+    m_dev->SetRenderState(D3DRS_FOGEND, *reinterpret_cast<const DWORD*>(&m_fogEnd));
 
-    // The sun is two directional lights on the same vector. A single light is
-    // clamped to [0,1], which is not enough to lift dark albedo; two sum to
-    // ~1.1 and stay below the clip point for everything but snow.
+    // The sun is a single directional light; a second, dimmer light shines
+    // straight down to stand in for the sky dome's fill. Their sum is tuned so a
+    // surface facing the sun lands just under the clamp: fixed-function lighting
+    // clamps to 1.0, and anything that clamps loses the vertex colour baked into
+    // the mesh (its shading and ambient occlusion), which flattens the scene.
     const Vec3 d = normalize(Vec3{0.4f, 0.5f, -0.75f});  // world is Z-up
     D3DLIGHT9 light;
     std::memset(&light, 0, sizeof(light));
     light.Type = D3DLIGHT_DIRECTIONAL;
-    light.Diffuse = color(0.78f, 0.75f, 0.69f, 1.0f);
-    light.Ambient = color(0.16f, 0.17f, 0.20f, 1.0f);
+    light.Diffuse = color(0.62f, 0.59f, 0.53f, 1.0f);
+    light.Ambient = color(0.0f, 0.0f, 0.0f, 1.0f);
     light.Specular = color(0.0f, 0.0f, 0.0f, 1.0f);
     light.Direction = D3DVECTOR{d.x, d.y, d.z};
     m_dev->SetLight(0, &light);
@@ -167,10 +202,10 @@ void Renderer::applyWorldStates() {
 
     std::memset(&light, 0, sizeof(light));
     light.Type = D3DLIGHT_DIRECTIONAL;
-    light.Diffuse = color(0.42f, 0.40f, 0.37f, 1.0f);
+    light.Diffuse = color(0.11f, 0.13f, 0.16f, 1.0f);
     light.Ambient = color(0.0f, 0.0f, 0.0f, 1.0f);
     light.Specular = color(0.0f, 0.0f, 0.0f, 1.0f);
-    light.Direction = D3DVECTOR{d.x, d.y, d.z};
+    light.Direction = D3DVECTOR{0.0f, 0.0f, -1.0f};
     m_dev->SetLight(1, &light);
     m_dev->LightEnable(1, TRUE);
     m_dev->LightEnable(2, FALSE);
@@ -179,20 +214,62 @@ void Renderer::applyWorldStates() {
     m_dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
     m_dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
     m_dev->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-    m_dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+    // Alpha is texture * vertex alpha. Models then blend by their texture's
+    // alpha; terrain layers pass the layer opacity in the vertex alpha.
+    m_dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
     m_dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+    m_dev->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+    // Stage 1 spends the exposure. The lit, textured colour from stage 0 is
+    // doubled and scaled by the texture factor, which is how a fixed-function
+    // pipe brightens past a fully lit surface; alpha passes through so the blend
+    // weights computed in stage 0 survive. drawMesh stands this stage down for
+    // the few untextured shapes, which carry their tint in the texture factor.
+    m_dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_MODULATE2X);
+    m_dev->SetTextureStageState(1, D3DTSS_COLORARG1, D3DTA_CURRENT);
+    m_dev->SetTextureStageState(1, D3DTSS_COLORARG2, D3DTA_TFACTOR);
+    m_dev->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+    // The stage reads no texture, but it still needs a coordinate set and a
+    // bound texture that the vertex format actually carries.
+    m_dev->SetTextureStageState(1, D3DTSS_TEXCOORDINDEX, 0);
+    m_dev->SetTextureStageState(1, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+    m_dev->SetTexture(1, m_white);
+    m_dev->SetRenderState(D3DRS_TEXTUREFACTOR, m_exposureFactor);
+
+    // Vertex colours and layer opacities ride in the vertex diffuse channel, so
+    // both material terms read from it and the lit colour becomes
+    // vertexColour * (ambient + sun terms).
+    m_dev->SetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, D3DMCS_COLOR1);
+    m_dev->SetRenderState(D3DRS_AMBIENTMATERIALSOURCE, D3DMCS_COLOR1);
+    m_dev->SetRenderState(D3DRS_EMISSIVEMATERIALSOURCE, D3DMCS_MATERIAL);
+
+    // Source-over blending, the case both terrain layers and alpha materials use.
+    m_dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+    m_dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    m_dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+    m_dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+    m_dev->SetRenderState(D3DRS_ALPHAREF, 0x00000080);
+    m_dev->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATER);
+
+    // Materials are only consulted for emissive/specular now, so a single zeroed
+    // material covers every draw.
+    D3DMATERIAL9 mat;
+    std::memset(&mat, 0, sizeof(mat));
+    m_dev->SetMaterial(&mat);
 }
 
 bool Renderer::createSky() {
     if (m_dev == nullptr) return false;
 
-    // A dome around the camera: rings from just below the horizon up to the
-    // zenith, shaded from haze at the horizon to deeper blue overhead.
+    // A dome around the camera: rings from below the horizon up to the zenith,
+    // shaded from haze at the horizon to deeper blue overhead. It reaches well
+    // below the horizon so that looking down from a height, or over a valley,
+    // never shows its rim: everything under the horizon is the fog colour, so
+    // the dome simply continues the haze wherever the ground does not reach.
     const int slices = 24;
-    const int stacks = 8;
+    const int stacks = 12;
     const float radius = 100000.0f;  // inside the far plane
     const float pi = 3.14159265358979f;
-    const float bottom = -0.35f;     // radians below the horizon
+    const float bottom = -1.45f;     // radians below the horizon
 
     std::vector<SkyVertex> verts;
     verts.reserve(static_cast<size_t>(stacks + 1) * static_cast<size_t>(slices + 1));
@@ -287,6 +364,9 @@ void Renderer::drawSky(const Vec3& eye) {
     m_dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
     m_dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
     m_dev->SetTexture(0, nullptr);
+    // The dome is authored at its own brightness, so the world's exposure stage
+    // stands down while it draws. applyWorldStates() puts it back afterwards.
+    m_dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
 
     m_dev->SetStreamSource(0, m_skyVb, 0, sizeof(SkyVertex));
     m_dev->SetIndices(m_skyIb);
@@ -412,6 +492,7 @@ bool Renderer::beginFrame() {
 
     m_dev->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, kHorizonColor, 1.0f, 0);
     m_dev->BeginScene();
+    m_drawCalls = 0;
     return true;
 }
 
@@ -502,20 +583,30 @@ Renderer::GpuMesh* Renderer::uploadMesh(const std::string& key, const Mesh& mesh
     if (it != m_meshes.end()) return &it->second;
     if (m_dev == nullptr || !mesh.valid()) return nullptr;
 
-    static_assert(sizeof(RtVertex) == sizeof(Vertex), "vertex layouts must match");
-
     GpuMesh gpu;
     const UINT vbytes = static_cast<UINT>(mesh.vertices.size() * sizeof(RtVertex));
     if (FAILED(m_dev->CreateVertexBuffer(vbytes, D3DUSAGE_WRITEONLY, kVertexFvf,
                                          D3DPOOL_MANAGED, &gpu.vb, nullptr))) {
         return nullptr;
     }
-    void* vp = nullptr;
-    if (FAILED(gpu.vb->Lock(0, 0, &vp, 0))) {
+    RtVertex* vp = nullptr;
+    if (FAILED(gpu.vb->Lock(0, 0, reinterpret_cast<void**>(&vp), 0))) {
         gpu.vb->Release();
         return nullptr;
     }
-    std::memcpy(vp, mesh.vertices.data(), vbytes);
+    for (size_t i = 0; i < mesh.vertices.size(); i++) {
+        const Vertex& src = mesh.vertices[i];
+        RtVertex& dst = vp[i];
+        dst.x = src.x;
+        dst.y = src.y;
+        dst.z = src.z;
+        dst.nx = src.nx;
+        dst.ny = src.ny;
+        dst.nz = src.nz;
+        dst.u = src.u;
+        dst.v = src.v;
+        dst.diffuse = packColor(src.r, src.g, src.b, src.a);
+    }
     gpu.vb->Unlock();
 
     const UINT ibytes = static_cast<UINT>(mesh.indices.size() * sizeof(uint32_t));
@@ -537,6 +628,14 @@ Renderer::GpuMesh* Renderer::uploadMesh(const std::string& key, const Mesh& mesh
     return &res.first->second;
 }
 
+void Renderer::releaseMesh(const std::string& key) {
+    auto it = m_meshes.find(key);
+    if (it == m_meshes.end()) return;
+    if (it->second.vb != nullptr) it->second.vb->Release();
+    if (it->second.ib != nullptr) it->second.ib->Release();
+    m_meshes.erase(it);
+}
+
 void Renderer::drawMesh(GpuMesh* gpu, const Mesh& mesh, const Mat4& world,
                         const std::vector<IDirect3DTexture9*>& textures) {
     if (m_dev == nullptr || gpu == nullptr || gpu->vb == nullptr || gpu->ib == nullptr) {
@@ -552,29 +651,40 @@ void Renderer::drawMesh(GpuMesh* gpu, const Mesh& mesh, const Mat4& world,
         if (sm.indexCount == 0) continue;
         const bool haveTex = i < textures.size() && textures[i] != nullptr;
         m_dev->SetTexture(0, haveTex ? textures[i] : m_white);
-
-        D3DMATERIAL9 mat;
-        std::memset(&mat, 0, sizeof(mat));
         if (haveTex) {
-            mat.Diffuse = color(1.0f, 1.0f, 1.0f, 1.0f);
+            m_dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+            m_dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_MODULATE2X);
+            m_dev->SetRenderState(D3DRS_TEXTUREFACTOR, m_exposureFactor);
         } else {
-            mat.Diffuse = color(sm.fallbackR, sm.fallbackG, sm.fallbackB, 1.0f);
+            // An untextured shape still needs its flat tint, and that rides the
+            // texture factor so the vertex colour stays free for the lit term.
+            // Stage 1 keeps doubling, so the factor is set to the square root of
+            // the wanted gain and the exposure lands exactly as it does on a
+            // textured surface.
+            m_dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TFACTOR);
+            m_dev->SetRenderState(
+                D3DRS_TEXTUREFACTOR,
+                D3DCOLOR_XRGB(tintScale(sm.fallbackR, m_exposure),
+                              tintScale(sm.fallbackG, m_exposure),
+                              tintScale(sm.fallbackB, m_exposure)));
         }
-        mat.Ambient = mat.Diffuse;
-        m_dev->SetMaterial(&mat);
 
-        if (sm.alphaTest != 0) {
-            m_dev->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE);
-            m_dev->SetRenderState(D3DRS_ALPHAREF, 0x00000080);
-            m_dev->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATER);
-        } else {
-            m_dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
-        }
+        m_dev->SetRenderState(D3DRS_ALPHATESTENABLE, sm.alphaTest != 0 ? TRUE : FALSE);
+        m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, sm.alphaBlend != 0 ? TRUE : FALSE);
 
         m_dev->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0,
                                     static_cast<UINT>(mesh.vertices.size()), sm.indexStart,
                                     sm.indexCount / 3);
+        ++m_drawCalls;
     }
+
+    // Leave the pipe opaque and back on its world defaults so the next item
+    // starts from a known state.
+    m_dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+    m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    m_dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+    m_dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_MODULATE2X);
+    m_dev->SetRenderState(D3DRS_TEXTUREFACTOR, m_exposureFactor);
 }
 
 IDirect3DTexture9* Renderer::uploadTexture(const std::string& key, const Image& img) {

@@ -8,18 +8,18 @@ portable C++20 that reads your own copy of the game and draws the world with
 code written from scratch. It is a port, not a mod: no injected DLLs, no patched
 executable, and no hooks into the original binary.
 
-You can already stand on the ground at Helgen and look out over the streamed
-exterior — terrain, buildings and rocks read straight from your own archives,
-lit and textured by this engine. The RPG, the people and the quests are still to
-come.
+You can already stand on the ground at Helgen and look out over a landscape that
+runs to the horizon — terrain, buildings and rocks read straight from your own
+archives, lit and textured by this engine. The RPG, the people and the quests are
+still to come.
 
 ## Status
 
 <!-- progress:start -->
 ```
-███████░░░░░░░░░░░░░  33%
+███████░░░░░░░░░░░░░  37%
 ```
-**11 done, 2 in progress, 18 to go** across 31 milestones, weighted by effort (see [ROADMAP.md](ROADMAP.md)).
+**13 done, 2 in progress, 18 to go** across 33 milestones, weighted by effort (see [ROADMAP.md](ROADMAP.md)).
 <!-- progress:end -->
 
 The data layer and the world are in place, and there is a walkable slice of
@@ -44,10 +44,18 @@ and quests.
   heightmap is reconstructed from its difference encoding and textured by the
   cell's own land textures, so you walk on the real ground rather than on boxes.
 - The exterior world streams around you a cell at a time as you move.
+- Beyond that, distant terrain is drawn from the same heightmaps on a coarse
+  grid: one draw call carries the whole landscape out to the horizon, coloured
+  by the average of each cell's own land textures, so the view opens out instead
+  of ending in a wall of fog a couple of hundred metres away.
 
 **Rendering and playing**
 - A Direct3D 9 host: lit and textured surfaces, alpha cutout for foliage and
   fences, and a GPU cache for meshes and textures.
+- Daylight, tuned against the original art: a directional sun with a dim sky
+  fill from above, and an exposure applied *after* the lighting clamp, so the
+  ground stays as bright as its own albedo and the vertex colour baked into the
+  meshes — their shading and ambient occlusion — survives instead of clipping.
 - A first-person controller with gravity, jumping and step-up, plus a free-fly
   mode for looking around. You stand on the terrain heightmap and collide with
   the placed geometry as it streams in.
@@ -127,9 +135,14 @@ Useful flags:
 | `--data DIR` / `--game DIR` | Use the Skyrim install in DIR |
 | `--ws HEX` | Worldspace FormID to start in (default `3C`, Tamriel) |
 | `--grid X Y` | Starting exterior cell (e.g. `4 -20` for Helgen) |
-| `--radius N` | Cells streamed around the player (default 1, i.e. 3×3) |
+| `--radius N` | Cells streamed around the player (default 4, i.e. 9×9) |
 | `--meshes BSA` | Archive to read meshes/textures from (repeatable) |
 | `--width W` / `--height H` | Window size |
+| `--fov DEG` | Vertical field of view (default 68) |
+| `--exposure N` | Post-lighting gain, 1..2 (default 1.8) |
+| `--cam X Y Z` | Fixed camera position, for screenshots |
+| `--look YAW PITCH` | Fixed camera angles, in degrees, with `--cam` |
+| `--shot FILE` | Save the final frame as a BMP |
 | `--frames N` | Render N frames then exit (headless smoke test) |
 | `--types` / `--limit N` | Dump the record-type histogram / cap loaded records |
 
