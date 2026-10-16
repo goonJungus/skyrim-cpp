@@ -75,7 +75,12 @@ bool buildTerrainMesh(const Cell& cell, const ModelResolver& resolver, Mesh& out
 // and at most kMaxTerrainLayers are returned -- the heaviest, since a cell can
 // carry two dozen that mostly cover a few vertices each. Empty when the cell has
 // no layered terrain.
-constexpr size_t kMaxTerrainLayers = 3;
+//
+// Six is chosen from the data: over a third of Tamriel's terrain cells carry
+// more than three layers, and a layer that is dropped is ground that is drawn
+// with the wrong surface. Quads a layer does not cover are not emitted at all,
+// so the extra layers cost far less fill than their count suggests.
+constexpr size_t kMaxTerrainLayers = 6;
 bool buildTerrainLayers(const Cell& cell, const ModelResolver& resolver,
                         std::vector<Mesh>& out);
 

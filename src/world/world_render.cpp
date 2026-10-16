@@ -85,7 +85,13 @@ void buildTerrainGrid(const Cell& cell, const float* h, std::vector<Vertex>& out
 // One 16x16 quadrant of the terrain grid, as a flat triangle list. Quadrant k
 // covers bit 1 of k on the row axis and bit 0 on the column axis: 0 bottom-left,
 // 1 bottom-right, 2 upper-left, 3 upper-right.
-void appendQuadrantIndices(std::vector<uint32_t>& idx, int quadrant) {
+//
+// A quad whose four corners are all fully transparent is left out. The base
+// terrain is opaque throughout, and a blend layer that only covers part of its
+// quadrant would otherwise spend its fill on ground it never touches -- and with
+// layers sorted back to front that is fill the scene pays every frame.
+void appendQuadrantIndices(std::vector<uint32_t>& idx, int quadrant,
+                           const std::vector<Vertex>& v) {
     const int row0 = (quadrant & 2) != 0 ? 16 : 0;
     const int col0 = (quadrant & 1) != 0 ? 16 : 0;
     for (int row = row0; row < row0 + 16; ++row) {
@@ -94,6 +100,9 @@ void appendQuadrantIndices(std::vector<uint32_t>& idx, int quadrant) {
             const uint32_t b = a + 1;
             const uint32_t c = a + kLandEdge;
             const uint32_t d = c + 1;
+            if (v[a].a <= 0.0f && v[b].a <= 0.0f && v[c].a <= 0.0f && v[d].a <= 0.0f) {
+                continue;
+            }
             idx.push_back(a);
             idx.push_back(c);
             idx.push_back(b);
@@ -218,7 +227,7 @@ bool buildTerrainMesh(const Cell& cell, const ModelResolver& resolver, Mesh& out
     std::vector<uint32_t> quadStart(4);
     for (int q = 0; q < 4; ++q) {
         quadStart[static_cast<size_t>(q)] = static_cast<uint32_t>(out.indices.size());
-        appendQuadrantIndices(out.indices, q);
+        appendQuadrantIndices(out.indices, q, out.vertices);
     }
 
     for (int q = 0; q < 4; ++q) {
@@ -294,12 +303,18 @@ bool buildTerrainLayers(const Cell& cell, const ModelResolver& resolver,
 
         Mesh mesh;
         buildTerrainGrid(cell, h, mesh.vertices);
+        // A layer is transparent everywhere the record does not mention: VTXT is
+        // sparse (about nine vertices per layer in Tamriel), so leaving the grid's
+        // default alpha in place would make every layer paint its whole quadrant
+        // opaquely and the topmost layer would win everywhere instead of blending
+        // only over the ground it actually covers.
+        for (Vertex& v : mesh.vertices) v.a = 0.0f;
         for (const LandVertexWeight& w : l.weights) {
             if (w.index < mesh.vertices.size()) {
                 mesh.vertices[w.index].a = w.opacity;
             }
         }
-        appendQuadrantIndices(mesh.indices, l.quadrant);
+        appendQuadrantIndices(mesh.indices, l.quadrant, mesh.vertices);
 
         Submesh sm;
         sm.indexStart = 0;

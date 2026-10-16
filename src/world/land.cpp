@@ -139,19 +139,33 @@ bool decodeLand(const uint8_t* data, size_t size, Land& out) {
                 }
             }
         } else if (sameType(p - kSubHeaderSize, 'V', 'T', 'X', 'T')) {
-            // VTXT: sparse opacities for the ATXT just above: u16 index + f32
-            // weight, 6 bytes per entry. Attach to the newest ATXT layer.
+            // VTXT: per-vertex opacity for the ATXT just above, six bytes per
+            // entry (u16 index, f32 weight).
+            //
+            // The index counts vertices inside that layer's own 17x17 quadrant,
+            // not the cell's 33x33 grid: over a quarter of a million entries, 94%
+            // are below 289, the quadrant's vertex count, while a cell-wide
+            // reading would put three quarters of them above it. Read as
+            // cell-wide the weights scatter across the cell; read as
+            // quadrant-local they land in runs along the border between two
+            // surfaces, which is what they are.
             if (!out.layers.empty() && s % 6 == 0) {
+                const LandLayer& src = out.layers.back();
+                const int row0 = (src.quadrant & 2) != 0 ? kLandQuadrantOffset : 0;
+                const int col0 = (src.quadrant & 1) != 0 ? kLandQuadrantOffset : 0;
                 LandLayer& l = out.layers.back();
                 const uint32_t n = s / 6;
                 l.weights.reserve(l.weights.size() + n);
                 for (uint32_t i = 0; i < n; i++) {
-                    const uint16_t idx = static_cast<uint16_t>(rdU16(body + static_cast<size_t>(i) * 6));
-                    const float op = rdF32(body + static_cast<size_t>(i) * 6 + 2);
-                    if (idx >= kLandVertices) continue;
+                    const size_t at = static_cast<size_t>(i) * 6;
+                    const uint16_t idx = static_cast<uint16_t>(rdU16(body + at));
+                    const float op = rdF32(body + at + 2);
+                    if (idx >= kLandQuadrantVertices) continue;   // not quadrant-local
                     if (!(op > 0.0f)) continue;   // drop empty samples, ours and NaN
                     LandVertexWeight w;
-                    w.index = idx;
+                    w.index = static_cast<uint16_t>(
+                        (row0 + idx / kLandQuadrantEdge) * kLandEdge +
+                        (col0 + idx % kLandQuadrantEdge));
                     w.opacity = op > 1.0f ? 1.0f : op;
                     l.weights.push_back(w);
                 }

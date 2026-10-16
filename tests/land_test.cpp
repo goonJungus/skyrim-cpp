@@ -37,6 +37,13 @@ void expectNear(float got, float want, const std::string& what) {
     }
 }
 
+void expectEq(size_t got, size_t want, const std::string& what) {
+    if (got != want) {
+        std::printf("    FAIL: %s (got %zu, want %zu)\n", what.c_str(), got, want);
+        failures++;
+    }
+}
+
 void putU32(std::vector<uint8_t>& v, uint32_t x) {
     v.push_back(static_cast<uint8_t>(x & 0xff));
     v.push_back(static_cast<uint8_t>((x >> 8) & 0xff));
@@ -135,6 +142,42 @@ int main() {
         expect(atxtLand.quadrantTexture[1] == 0x0008b01e, "quadrant 1 ATXT layer");
         expect(atxtLand.quadrantTexture[2] == 0x0008b01e, "quadrant 2 ATXT layer");
         expect(atxtLand.quadrantTexture[3] != kFormIDNull, "untextured quadrant borrows one");
+    }
+
+    // --- VTXT weights are quadrant-local ------------------------------------
+    // The index counts vertices inside the layer's own 17x17 quadrant, so it has
+    // to be mapped onto the cell grid through the ATXT quadrant: bit 1 is the
+    // north half, bit 0 the east half.
+    std::vector<uint8_t> vtxtPayload;
+    putSub(vtxtPayload, "VHGT", makeVhgt(0.0f, {}));
+    putSub(vtxtPayload, "ATXT", atxt(0x0000089b, 3, 1));   // upper-right quadrant
+    std::vector<uint8_t> vtxt;
+    auto vtxtEntry = [](uint16_t index, float opacity) {
+        std::vector<uint8_t> v;
+        v.push_back(static_cast<uint8_t>(index & 0xff));
+        v.push_back(static_cast<uint8_t>(index >> 8));
+        putF32(v, opacity);
+        return v;
+    };
+    for (const auto& e : {vtxtEntry(0, 1.0f), vtxtEntry(kLandQuadrantEdge + 3, 0.5f),
+                          vtxtEntry(kLandQuadrantVertices, 1.0f),   // out of range: dropped
+                          vtxtEntry(1, 0.0f)}) {                   // empty: dropped
+        vtxt.insert(vtxt.end(), e.begin(), e.end());
+    }
+    putSub(vtxtPayload, "VTXT", vtxt);
+    Land vtxtLand;
+    expect(decodeLand(vtxtPayload.data(), vtxtPayload.size(), vtxtLand),
+           "VTXT payload decodes");
+    if (vtxtLand.present && vtxtLand.layers.size() == 1) {
+        const LandLayer& l = vtxtLand.layers[0];
+        expectEq(l.weights.size(), 2, "quadrant-local weights kept");
+        if (l.weights.size() == 2) {
+            // Local (0,0) of quadrant 3 is cell (16,16) -> 16 * 33 + 16 = 544.
+            expectEq(l.weights[0].index, 16 * kLandEdge + 16, "weight 0 on the quadrant corner");
+            // Local (1,3) of quadrant 3 is cell (17,19) -> 17 * 33 + 19 = 580.
+            expectEq(l.weights[1].index, 17 * kLandEdge + 19, "weight 1 row-major in quadrant");
+            expectNear(l.weights[1].opacity, 0.5f, "weight opacity read");
+        }
     }
 
     // --- malformed records --------------------------------------------------

@@ -72,9 +72,13 @@ STAT_BARREL = 0x00001001
 STAT_NOMODEL = 0x00001002
 MISSING = 0x00009999
 CELL = 0x00000301
+LTEX_GROUND = 0x00002000
+TXST_GROUND = 0x00002001
+LTEX_NO_SET = 0x00002002
 
 HOUSE_MODEL = "Architecture\\Fixture\\house01.nif"
 BARREL_MODEL = "Clutter\\Fixture\\barrel01.nif"
+GROUND_DIFFUSE = "textures\\land\\fixture01.dds"
 
 
 def build():
@@ -90,6 +94,13 @@ def build():
                   + stat(STAT_BARREL, "FixtureStatBarrel", BARREL_MODEL)
                   + stat(STAT_NOMODEL, "FixtureStatNoModel"))
     out += group('STAT', stat_group)
+
+    # --- a land texture and the texture set it points at, so a terrain layer
+    # --- has a path to draw with (LTEX -> TNAM -> TXST -> TX00) --------------
+    ltex = record('LTEX', LTEX_GROUND, sub('TNAM', struct.pack('<I', TXST_GROUND)))
+    txst = record('TXST', TXST_GROUND, sub('TX00', zstr(GROUND_DIFFUSE)))
+    out += group('LTEX', ltex + record('LTEX', LTEX_NO_SET, sub('EDID', zstr("FixtureLtexNoSet"))))
+    out += group('TXST', txst)
 
     # --- WRLD with one exterior cell at (0,0) ------------------------------
     wrld = record('WRLD', WS, sub('EDID', zstr("FixtureWorld")))

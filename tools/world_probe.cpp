@@ -36,6 +36,82 @@ size_t inBoundsCount(const Cell& cell) {
     return n;
 }
 
+// Every land layer of one cell, with where its weighted vertices actually sit.
+// Ground truth for the quadrant question that the aggregate counters above only
+// hint at: for each layer, the quadrant its ATXT names and a count of weighted
+// vertices per cell quadrant (row >= 16 is the upper half, col >= 16 the right).
+void dumpLandLayers(const Cell& c) {
+    std::printf("land dump: cell (%d %d), %zu layers, base texture %06x\n", c.gridX, c.gridY,
+                c.land.layers.size(), c.land.baseTexture);
+    for (size_t i = 0; i < c.land.layers.size(); i++) {
+        const LandLayer& l = c.land.layers[i];
+        size_t perQuad[4] = {0, 0, 0, 0};
+        float maxOpacity = 0.0f, sumOpacity = 0.0f;
+        for (const LandVertexWeight& w : l.weights) {
+            const int row = static_cast<int>(w.index) / kLandEdge;
+            const int col = static_cast<int>(w.index) % kLandEdge;
+            if (row >= 0 && row < kLandEdge && col >= 0 && col < kLandEdge) {
+                ++perQuad[(row >= 16 ? 2 : 0) + (col >= 16 ? 1 : 0)];
+            }
+            sumOpacity += w.opacity;
+            if (w.opacity > maxOpacity) maxOpacity = w.opacity;
+        }
+        std::printf("  %2zu q=%u layer=%2u tex=%06x weights=%4zu perQuad=%zu/%zu/%zu/%zu "
+                    "opacity max=%.2f mean=%.2f\n",
+                    i, static_cast<unsigned>(l.quadrant), static_cast<unsigned>(l.layer), l.texture,
+                    l.weights.size(), perQuad[0], perQuad[1], perQuad[2], perQuad[3], maxOpacity,
+                    l.weights.empty() ? 0.0f : sumOpacity / static_cast<float>(l.weights.size()));
+        if (l.weights.size() > 0 && l.weights.size() <= 24) {
+            std::printf("      indices:");
+            for (const LandVertexWeight& w : l.weights) {
+                std::printf(" %u(%.2f)", static_cast<unsigned>(w.index), w.opacity);
+            }
+            std::printf("\n");
+        }
+    }
+}
+
+// Weighted vertices of terrain blend layers sit along the border between two
+// surfaces, so they arrive in runs that touch their neighbours. Read the VTXT
+// index as cell-wide (0..1088) or as quadrant-local (0..288, ATXT's quadrant
+// giving the half) and count how often two weighted vertices end up adjacent on
+// the 33x33 grid: the right reading produces long coherent patches, the wrong
+// one scatters them at random, so its neighbour count collapses.
+void dumpLayerCoherence(const CellSystem& cells, FormID ws, int gx, int gy, int span) {
+    size_t weights = 0, pairsRaw = 0, pairsLocal = 0, overLocal = 0;
+    for (const Cell& c : cells.cells()) {
+        if (c.isInterior || !c.land.present || c.worldspace != ws) continue;
+        if (c.gridX < gx || c.gridX >= gx + span || c.gridY < gy || c.gridY >= gy + span) continue;
+        for (const LandLayer& l : c.land.layers) {
+            if (l.quadrant >= 4 || l.weights.empty()) continue;
+            const int row0 = (l.quadrant & 2) != 0 ? 16 : 0;
+            const int col0 = (l.quadrant & 1) != 0 ? 16 : 0;
+            std::vector<uint8_t> raw(kLandVertices, 0), local(kLandVertices, 0);
+            for (const LandVertexWeight& w : l.weights) {
+                ++weights;
+                if (w.index < kLandVertices) raw[w.index] = 1;
+                if (w.index >= 289) ++overLocal;
+                if (w.index < 289) {
+                    const int row = row0 + w.index / 17;
+                    const int col = col0 + w.index % 17;
+                    local[static_cast<size_t>(row * kLandEdge + col)] = 1;
+                }
+            }
+            for (size_t i = 0; i < kLandVertices; i++) {
+                const int row = static_cast<int>(i) / kLandEdge;
+                const int col = static_cast<int>(i) % kLandEdge;
+                if (row + 1 < kLandEdge && raw[static_cast<size_t>(i)] && raw[static_cast<size_t>(i + kLandEdge)]) ++pairsRaw;
+                if (row + 1 < kLandEdge && local[static_cast<size_t>(i)] && local[static_cast<size_t>(i + kLandEdge)]) ++pairsLocal;
+                if (col + 1 < kLandEdge && raw[static_cast<size_t>(i)] && raw[static_cast<size_t>(i + 1)]) ++pairsRaw;
+                if (col + 1 < kLandEdge && local[static_cast<size_t>(i)] && local[static_cast<size_t>(i + 1)]) ++pairsLocal;
+            }
+        }
+    }
+    std::printf("layer coherence: %zu weights, %zu above 288, neighbour pairs cell-wide %zu, "
+                "quadrant-local %zu\n",
+                weights, overLocal, pairsRaw, pairsLocal);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -94,6 +170,13 @@ int main(int argc, char** argv) {
         size_t bytesWeights = 0;
         size_t minPos = 0xFFFF, maxPos = 0, posOverQuadrant = 0;
         size_t maxLayerWeights = 0;
+        // Do a layer's weighted vertices actually sit in the quadrant its ATXT
+        // names? Checked under both readings of the quadrant bits, because a
+        // layer drawn outside its own quadrant covers nothing.
+        size_t layersA = 0, layersB = 0, weightsA = 0, weightsB = 0, weightsTotal = 0;
+        size_t indexBucket[4] = {0, 0, 0, 0};
+        size_t quadOfLayer[4][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}};
+        size_t weightOfLayer[4][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}};
         for (const Cell& c : cells.cells()) {
             if (c.isInterior || !c.land.present) continue;
             ++withLand;
@@ -106,11 +189,43 @@ int main(int argc, char** argv) {
             for (const LandLayer& l : c.land.layers) {
                 w += l.weights.size();
                 if (l.weights.size() > maxLayerWeights) maxLayerWeights = l.weights.size();
+                if (l.quadrant >= 4) continue;
+                // A: bit 1 is the row half, bit 0 the column half. B: the reverse.
+                const int rowA = (l.quadrant & 2) != 0 ? 16 : 0;
+                const int colA = (l.quadrant & 1) != 0 ? 16 : 0;
+                const int rowB = colA;
+                const int colB = rowA;
+                bool inA = false, inB = false;
+                size_t perQuad[4] = {0, 0, 0, 0};
                 for (const LandVertexWeight& vw : l.weights) {
+                    const int row = static_cast<int>(vw.index) / kLandEdge;
+                    const int col = static_cast<int>(vw.index) % kLandEdge;
+                    ++perQuad[(row >= 16 ? 2 : 0) + (col >= 16 ? 1 : 0)];
+                    if (row >= rowA && row < rowA + 16 && col >= colA && col < colA + 16) {
+                        ++weightsA;
+                        inA = true;
+                    }
+                    if (row >= rowB && row < rowB + 16 && col >= colB && col < colB + 16) {
+                        ++weightsB;
+                        inB = true;
+                    }
+                    ++weightsTotal;
+                    // 17x17 = 289: a quadrant-local index cannot reach it, a
+                    // cell-wide one spends three quarters of its entries above it.
+                    ++indexBucket[vw.index < 289 ? 0 : (vw.index < 578 ? 1
+                                              : (vw.index < 867 ? 2 : 3))];
                     if (vw.index < minPos) minPos = vw.index;
                     if (vw.index > maxPos) maxPos = vw.index;
                     if (vw.index >= 289) ++posOverQuadrant;
                 }
+                if (inA) ++layersA;
+                if (inB) ++layersB;
+                size_t best = 0;
+                for (int q = 1; q < 4; q++) {
+                    if (perQuad[q] > perQuad[best]) best = static_cast<size_t>(q);
+                }
+                ++quadOfLayer[l.quadrant][best];
+                weightOfLayer[l.quadrant][best] += perQuad[best];
             }
             if (w > 0) ++withWeights;
             totalWeights += w;
@@ -124,11 +239,31 @@ int main(int argc, char** argv) {
         std::printf("land: layers total=%zu max=%zu  weights total=%zu max=%zu (%.1f MB)\n",
                     totalLayers, maxLayers, totalWeights, maxWeights,
                     static_cast<double>(bytesWeights) / (1024.0 * 1024.0));
+        std::printf("land: weights inside the named quadrant: reading A %zu/%zu in %zu layers, "
+                    "reading B %zu/%zu in %zu layers\n",
+                    weightsA, weightsTotal, layersA, weightsB, weightsTotal, layersB);
+        std::printf("land: weight index buckets (<289 / <578 / <867 / rest): %zu %zu %zu %zu\n",
+                    indexBucket[0], indexBucket[1], indexBucket[2], indexBucket[3]);
+        std::printf("land: declared quadrant (row) against the quadrant holding most of a "
+                    "layer's weights (col), in layers / in weights:\n        ");
+        for (size_t d = 0; d < 4; d++) {
+            std::printf("  declared %zu:", d);
+            for (size_t b = 0; b < 4; b++) {
+                std::printf(" %zu/%zu", quadOfLayer[d][b], weightOfLayer[d][b]);
+            }
+            std::printf("\n        ");
+        }
+        std::printf("\n");
         std::printf("land: layers-per-cell histogram:");
         for (size_t i = 0; i < 9; i++) {
             if (layerHist[i] != 0) std::printf(" %zu:%zu", i, layerHist[i]);
         }
         std::printf("\n");
+        if (haveWs && haveGrid == 2) {
+            const Cell* sampled = cells.findCell(wantWs, wantX, wantY);
+            if (sampled != nullptr && sampled->land.present) dumpLandLayers(*sampled);
+            dumpLayerCoherence(cells, wantWs, wantX, wantY, 24);
+        }
         if (meshes.empty()) return 0;
     }
 
@@ -155,6 +290,7 @@ int main(int argc, char** argv) {
                 cell->gridX, cell->gridY,
                 cell->editorId.empty() ? "(none)" : cell->editorId.c_str(),
                 cell->objects.size());
+    if (landStats && cell->land.present) dumpLandLayers(*cell);
 
     // Resolve placed models.
     const std::vector<PlacedModel> instances = instancesForCell(*cell, resolver);

@@ -30,6 +30,13 @@ constexpr int kLandVertices = kLandEdge * kLandEdge;   // 1089
 constexpr float kLandVertexSpacing = 128.0f;           // 4096 / 32
 constexpr float kLandHeightScale = 8.0f;               // stored unit -> game units
 
+// The cell splits into four 16x16-quad quadrants, each its own 17x17 vertices.
+// A quadrant shares its inner border with its neighbours, so the grid is 33 wide
+// rather than 34.
+constexpr int kLandQuadrantEdge = kLandEdge / 2 + 1;                 // 17
+constexpr int kLandQuadrantVertices = kLandQuadrantEdge * kLandQuadrantEdge;   // 289
+constexpr int kLandQuadrantOffset = kLandEdge - kLandQuadrantEdge;   // 16
+
 // One vertex sample of a land-texture layer: which heightmap vertex it applies
 // to and how strongly the layer shows there. VTXT stores these sparsely, so a
 // layer only carries entries for the vertices it actually covers.

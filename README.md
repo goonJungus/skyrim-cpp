@@ -17,9 +17,9 @@ still to come.
 
 <!-- progress:start -->
 ```
-███████░░░░░░░░░░░░░  37%
+████████░░░░░░░░░░░░  38%
 ```
-**13 done, 2 in progress, 18 to go** across 33 milestones, weighted by effort (see [ROADMAP.md](ROADMAP.md)).
+**14 done, 1 in progress, 18 to go** across 33 milestones, weighted by effort (see [ROADMAP.md](ROADMAP.md)).
 <!-- progress:end -->
 
 The data layer and the world are in place, and there is a walkable slice of
@@ -43,6 +43,9 @@ and quests.
 - Exterior terrain is built from the original `LAND` records: the 33×33 vertex
   heightmap is reconstructed from its difference encoding and textured by the
   cell's own land textures, so you walk on the real ground rather than on boxes.
+- Ground fades between surfaces the way the records describe it: a cell's land
+  texture layers blend per vertex, where grass gives way to snow, rock to dirt,
+  each layer drawn only over the ground it actually covers.
 - The exterior world streams around you a cell at a time as you move.
 - Beyond that, distant terrain is drawn from the same heightmaps on a coarse
   grid: one draw call carries the whole landscape out to the horizon, coloured

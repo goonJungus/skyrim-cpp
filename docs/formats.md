@@ -171,9 +171,23 @@ BTXT / ATXT -> LTEX --TNAM--> TXST --TX00--> "Landscape\\FieldGrass01.dds"
 bottom-right, 2 = upper-left, 3 = upper-right), `u8` unknown, `u16` layer. The
 reader keeps each quadrant's lowest layer as its texture. The terrain mesh is
 split into the four quadrants so each can carry its own texture; adjacent
-quadrants that share one merge into a single submesh. Real Skyrim blends layers
-per vertex (`VCLR` / `VTXT` weights), which is not done yet — the quadrant
-texture is a stand-in.
+quadrants that share one merge into a single submesh.
+
+Layers above the lowest blend on top of it, weighted per vertex by `VTXT` (6
+bytes per entry: `u16` index, `f32` opacity, empty samples dropped). **The index
+counts vertices inside that layer's own 17×17 quadrant, not the cell's 33×33
+grid.** Over Tamriel, 94% of the entries are below 289 — the quadrant's vertex
+count — where a cell-wide reading would put three quarters of them above it.
+Mapped onto the cell through the `ATXT` quadrant, 94% of the weights land inside
+the quadrant that names them (the remainder sit on the border vertices the
+quadrants share) and they arrive in runs along the border between two surfaces,
+which is what a blend mask is. Read as cell-wide they scatter across the cell and
+the ground shows the wrong surface in the wrong place.
+
+A cell's quadrant splits its 256 quads across several layers this way — most
+carry only a handful of weights each — so the renderer emits only the quads a
+layer's own weights touch, instead of blending a whole 16×16 quadrant at zero
+opacity.
 
 A quirk worth recording: `TX00` paths (and `LTEX` generally) are relative to the
 `Data` folder **without** a `textures\` root, unlike NIF texture paths. The host

@@ -19,7 +19,7 @@ changing anything here, run `python scripts/progress.py` to refresh the README.
 - [x] Cell to placed models to meshes pipeline (`MODL` → archive → mesh) (w 2)
 - [~] Cell streaming around the player (configurable grid; no unloading or LOD objects yet) (w 2)
 - [x] Terrain: `LAND` heightmaps (`VHGT`) and walkable ground (w 2)
-- [~] Land layer textures: per-quadrant `ATXT`/`BTXT` selection, no per-vertex blending yet (w 1)
+- [x] Land layer textures: per-quadrant `ATXT`/`BTXT` selection with per-vertex `VTXT` blending (w 1)
 - [x] Distant terrain: coarse `LAND` ring out to the horizon, one draw call, no textures (w 2)
 - [ ] Interiors: doors, portals and interior lighting (w 2)
 - [ ] Water (w 1)
