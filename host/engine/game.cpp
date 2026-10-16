@@ -35,6 +35,18 @@ constexpr float kPlayerHeight = 128.0f;
 constexpr float kStepHeight = 50.0f;
 constexpr float kGravity = 800.0f;     // world units / s^2
 
+// Cells around the player that get collision geometry, in cells of 4096 units
+// (about 58 m). One ring is 175 m across: further out than a player walks before
+// the ring is recentred on them, and close enough that nothing they can touch is
+// missing. Wider rings cost tens of megabytes of triangles for scenery nobody
+// can reach.
+constexpr int kCollisionRadius = 1;
+
+// Below this bounding radius a placed model is clutter rather than something to
+// walk into: pebbles, grass tufts, the fittings on a workbench. Keeping them out
+// by size beats a hand-written list of every prop name in the game.
+constexpr float kCollisionMinRadius = 30.0f;
+
 // The distant-terrain ring is drawn as one mesh, uploaded under this key so a
 // rebuild can replace the GPU copy instead of leaking it.
 constexpr const char* kFarMeshKey = "far_terrain";
@@ -120,11 +132,7 @@ bool Game::init(const GameOptions& opt, std::string* err) {
     const float cx = static_cast<float>(opt.gridX) * kCellSize + kCellSize * 0.5f;
     const float cy = static_cast<float>(opt.gridY) * kCellSize + kCellSize * 0.5f;
     rebuildStream(cx, cy);
-    float top = m_floorZ;
-    for (const Aabb& b : m_colliders) {
-        if (b.valid() && b.mx.z > top) top = b.mx.z;
-    }
-    float spawnZ = top + 400.0f;
+    float spawnZ = m_floorZ + 400.0f;
     float terrainZ = 0.0f;
     if (terrainHeightAt(cx, cy, terrainZ)) {
         spawnZ = std::max(spawnZ, terrainZ + 400.0f);
@@ -138,8 +146,8 @@ bool Game::init(const GameOptions& opt, std::string* err) {
         m_player.pitch = opt.lookPitchDeg * 3.14159265f / 180.0f;
         rebuildStream(m_player.pos.x, m_player.pos.y);
     }
-    std::printf("skyrim: %zu instances, %zu colliders, spawn z=%.0f\n", m_draw.size(),
-                m_colliders.size(), m_player.pos.z);
+    std::printf("skyrim: %zu instances, %zu collision cells, spawn z=%.0f\n", m_draw.size(),
+                m_collision.size(), m_player.pos.z);
     // Point the fog at the streamed extent: the world then fades into the sky
     // where the streamed cells actually run out, instead of showing a hard edge
     // (range too short) or dissolving into a distant void (range too long).
@@ -400,15 +408,37 @@ void Game::buildCell(int gx, int gy, std::vector<DrawItem>& out) {
     }
 
     const std::vector<PlacedModel> inst = instancesForCell(*cell, m_resolver);
+    // Collision geometry for this cell, built once and kept. Only cells within
+    // the player's ring get any: the outer ring of the stream is scenery, and
+    // turning all of it into triangles costs memory for nothing you can walk
+    // into. addMesh itself drops the alpha-blended submeshes and any model too
+    // small to be worth walking into.
+    //
+    // A cell's geometry depends only on what is placed in it, so it is built the
+    // first time the cell is streamed and kept from then on; adding to a cell
+    // that already holds its triangles would double them on every rebuild over
+    // ground the player has not left. A null pointer marks a cell that is
+    // already there, and therefore done.
+    CollisionCell* collision = nullptr;
+    if (std::abs(gx - m_centerGx) <= kCollisionRadius &&
+        std::abs(gy - m_centerGy) <= kCollisionRadius) {
+        const auto [slot, fresh] = m_collision.try_emplace(gridKey(gx, gy));
+        if (fresh) collision = &slot->second;
+    }
+
     for (const PlacedModel& m : inst) {
         const Mesh* mesh = loadMesh(m.modelPath);
         if (mesh == nullptr) continue;
+        const Mat4 world = instanceMatrix(m.x, m.y, m.z, m.rotX, m.rotY, m.rotZ, m.scale);
+        if (collision != nullptr) {
+            collision->addMesh(*mesh, world.m, kCollisionMinRadius);
+        }
         Renderer::GpuMesh* gpu = m_renderer.uploadMesh(normalizePath(m.modelPath), *mesh);
         if (gpu == nullptr) continue;
         DrawItem item;
         item.mesh = mesh;
         item.gpu = gpu;
-        item.world = instanceMatrix(m.x, m.y, m.z, m.rotX, m.rotY, m.rotZ, m.scale);
+        item.world = world;
         item.textures.reserve(mesh->submeshes.size());
         for (const Submesh& sm : mesh->submeshes) {
             item.textures.push_back(loadTexture(sm.texturePath));
@@ -482,7 +512,7 @@ void Game::rebuildStream(float centerX, float centerY) {
             buildCell(gx + dx, gy + dy, m_draw);
         }
     }
-    updateColliders();
+    buildCollision();
     const auto t2 = std::chrono::steady_clock::now();
     // A stream rebuild happens whenever the player crosses a cell, so its cost
     // is the hitch they feel while walking. Keep it in sight.
@@ -494,23 +524,86 @@ void Game::rebuildStream(float centerX, float centerY) {
                 farMs, m_draw.size());
 }
 
-void Game::updateColliders() {
-    m_colliders.clear();
-    m_colliders.reserve(m_draw.size());
-    bool have = false;
+void Game::buildCollision() {
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // Forget the cells that have streamed out of the player's ring, so walking
+    // across the world does not accumulate every triangle it ever walked past.
+    const int keep = kCollisionRadius;
+    for (auto it = m_collision.begin(); it != m_collision.end();) {
+        const int gx = static_cast<int>(static_cast<int32_t>(it->first >> 32));
+        const int gy = static_cast<int>(static_cast<int32_t>(it->first & 0xffffffffu));
+        const bool inRange =
+            std::abs(gx - m_centerGx) <= keep && std::abs(gy - m_centerGy) <= keep;
+        it = inRange ? std::next(it) : m_collision.erase(it);
+    }
+
+    size_t triangles = 0;
+    size_t nodes = 0;
+    size_t built = 0;
     float floorZ = 0.0f;
-    // buildCell already worked out each item's world bounds, so this is just a
-    // gather rather than another eight-corner transform per instance.
-    for (const DrawItem& d : m_draw) {
-        if (d.terrain) continue;   // terrain is a surface, not a box
-        if (!d.bounds.valid()) continue;
-        m_colliders.push_back(d.bounds);
-        if (!have || d.bounds.mn.z < floorZ) {
-            floorZ = d.bounds.mn.z;
-            have = true;
+    bool haveFloor = false;
+    for (auto& [key, cell] : m_collision) {
+        if (!cell.built() && cell.triangleCount() > 0) {
+            cell.build();
+            ++built;
+        }
+        triangles += cell.triangleCount();
+        nodes += cell.nodeCount();
+        const CollisionBounds& b = cell.bounds();
+        if (!b.valid()) continue;
+        if (!haveFloor || b.minZ < floorZ) {
+            floorZ = b.minZ;
+            haveFloor = true;
         }
     }
-    m_floorZ = have ? floorZ : 0.0f;
+    m_floorZ = haveFloor ? floorZ : 0.0f;
+
+    const double ms = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - t0).count();
+    std::printf("skyrim: collision %zu triangles in %zu cells, %zu nodes "
+                "(%zu built, %.1f ms)\n",
+                triangles, m_collision.size(), nodes, built, ms);
+}
+
+// Walks the cells that can hold geometry touching a capsule at (x, y): the one
+// that point is in, plus its eight neighbours. A cell is 4096 units across and
+// the player is 128 tall, so a 3x3 ring covers every boundary a body can reach.
+template <typename Fn>
+void forEachNearCell(const std::unordered_map<uint64_t, CollisionCell>& cells, float x,
+                     float y, Fn&& fn) {
+    const int gx = static_cast<int>(std::floor(x / kCellSize));
+    const int gy = static_cast<int>(std::floor(y / kCellSize));
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            const auto it = cells.find(gridKey(gx + dx, gy + dy));
+            if (it != cells.end()) fn(it->second);
+        }
+    }
+}
+
+int Game::resolvePlayerCollision(Vec3f& feet) const {
+    int contacts = 0;
+    forEachNearCell(m_collision, feet.x, feet.y,
+                    [&](const CollisionCell& cell) {
+                        contacts += cell.resolveCapsule(feet, kPlayerRadius, kPlayerHeight);
+                    });
+    return contacts;
+}
+
+bool Game::groundHeightNear(float x, float y, float fromZ, float& outZ) const {
+    bool found = false;
+    float best = 0.0f;
+    forEachNearCell(m_collision, x, y, [&](const CollisionCell& cell) {
+        float z = 0.0f;
+        if (cell.groundHeight(x, y, fromZ, kPlayerRadius, z) && (!found || z > best)) {
+            best = z;
+            found = true;
+        }
+    });
+    if (!found) return false;
+    outZ = best;
+    return true;
 }
 
 Vec3 Game::cameraForward() const {
@@ -581,43 +674,48 @@ void Game::updatePlayer(float dt) {
     if (keyDown('D')) wish = wish + right;
     if (keyDown('A')) wish = wish - right;
 
-    // Horizontal collide-and-slide against the streamed AABBs.
+    // Horizontal move. A cliff is a wall: the terrain heightmap is the open
+    // world's floor, so a step taller than the player can climb is refused and
+    // the move slides along the contour instead of through the rock.
     Vec3 np = m_player.pos;
     const Vec3 horiz = normalize(wish) * (speed * dt);
     np.x += horiz.x;
     np.y += horiz.y;
-    const float bodyLo = m_player.pos.z;
-    const float bodyHi = m_player.pos.z + kPlayerHeight;
-    for (const Aabb& b : m_colliders) {
-        if (b.mx.z <= bodyLo + 1.0f) continue;   // low enough to step over
-        if (b.mn.z >= bodyHi) continue;          // entirely above the head
-        const float bx0 = b.mn.x - kPlayerRadius, bx1 = b.mx.x + kPlayerRadius;
-        const float by0 = b.mn.y - kPlayerRadius, by1 = b.mx.y + kPlayerRadius;
-        if (np.x <= bx0 || np.x >= bx1 || np.y <= by0 || np.y >= by1) continue;
-        const float px0 = np.x - bx0, px1 = bx1 - np.x;
-        const float py0 = np.y - by0, py1 = by1 - np.y;
-        if (std::min(px0, px1) < std::min(py0, py1)) {
-            np.x += (px0 < px1) ? -px0 : px1;
+    const float climbTo = m_player.pos.z + kStepHeight;
+    auto tooSteep = [&](float x, float y) {
+        float tz = 0.0f;
+        return terrainHeightAt(x, y, tz) && tz > climbTo;
+    };
+    if (tooSteep(np.x, np.y)) {
+        if (!tooSteep(np.x, m_player.pos.y)) {
+            np.y = m_player.pos.y;
+        } else if (!tooSteep(m_player.pos.x, np.y)) {
+            np.x = m_player.pos.x;
         } else {
-            np.y += (py0 < py1) ? -py0 : py1;
+            np = m_player.pos;
         }
     }
     m_player.pos.x = np.x;
     m_player.pos.y = np.y;
 
-    // Vertical: gravity, then settle onto the highest surface under the feet.
+    // Gravity, then push the capsule back out of anything it ended up inside:
+    // a wall it walked into, a railing, the deck of a bridge it walked off.
     m_player.vel.z -= kGravity * dt;
     m_player.pos.z += m_player.vel.z * dt;
+    Vec3f feet{m_player.pos.x, m_player.pos.y, m_player.pos.z};
+    resolvePlayerCollision(feet);
+    m_player.pos.x = feet.x;
+    m_player.pos.y = feet.y;
+    m_player.pos.z = feet.z;
 
+    // Ground: the highest streamed surface within a step's reach of the feet,
+    // plus the terrain heightmap, which is the real floor out in the open.
     float ground = -1e30f;
-    for (const Aabb& b : m_colliders) {
-        if (m_player.pos.x <= b.mn.x - kPlayerRadius || m_player.pos.x >= b.mx.x + kPlayerRadius) continue;
-        if (m_player.pos.y <= b.mn.y - kPlayerRadius || m_player.pos.y >= b.mx.y + kPlayerRadius) continue;
-        if (b.mx.z <= m_player.pos.z + kStepHeight && b.mx.z > ground) ground = b.mx.z;
+    float gz = 0.0f;
+    if (groundHeightNear(m_player.pos.x, m_player.pos.y, m_player.pos.z + kStepHeight, gz) &&
+        gz > ground) {
+        ground = gz;
     }
-    // Terrain underfoot: the heightmap is the real floor in the open world. It
-    // counts as ground while its surface is within step height of the feet, so
-    // the player climbs slopes instead of clipping through them.
     float terrainZ = 0.0f;
     if (terrainHeightAt(m_player.pos.x, m_player.pos.y, terrainZ) &&
         terrainZ <= m_player.pos.z + kStepHeight && terrainZ > ground) {
@@ -755,6 +853,14 @@ int Game::run() {
                     "%zu draw calls\n",
                     frame, m_lastVisible, avgMs,
                     avgMs > 0.0 ? 1000.0 / avgMs : 0.0, m_renderer.drawCalls());
+        // Where the player came to rest. A bounded run is how the world gets
+        // checked without a keyboard, so say whether gravity settled them on
+        // something or dropped them through it.
+        if (!m_opt.haveCam) {
+            std::printf("skyrim: player at (%.0f %.0f %.0f), %s\n", m_player.pos.x,
+                        m_player.pos.y, m_player.pos.z,
+                        m_player.grounded ? "on the ground" : "falling");
+        }
     }
     return 0;
 }
@@ -765,7 +871,7 @@ void Game::shutdown() {
     m_terrainLayers.clear();
     m_opaque.clear();
     m_blended.clear();
-    m_colliders.clear();
+    m_collision.clear();
     m_texCache.clear();
     m_meshBounds.clear();
     m_renderer.shutdown();

@@ -31,6 +31,7 @@ add_library(skyrim_module STATIC
   src/world/texture.cpp
   src/world/nif.cpp
   src/world/world_render.cpp
+  src/world/collision.cpp
   src/world/skyrim_world.cpp
 )
 
@@ -184,5 +185,10 @@ if(SKYRIM_BUILD_TESTS)
     add_executable(land_test tests/land_test.cpp)
     target_link_libraries(land_test PRIVATE skyrim_module)
     add_test(NAME land COMMAND land_test)
+
+    # Like land_test, collision_test builds its meshes in memory.
+    add_executable(collision_test tests/collision_test.cpp)
+    target_link_libraries(collision_test PRIVATE skyrim_module)
+    add_test(NAME collision COMMAND collision_test)
   endif()
 endif()

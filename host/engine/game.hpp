@@ -3,7 +3,7 @@
 // The game owns everything the host needs for a session and nothing more: the
 // library's world data (form database, cells, archives), a mesh cache and a
 // texture cache on top of them, and a first-person player with gravity and
-// axis-aligned collision against the streamed geometry.
+// capsule collision against the streamed geometry.
 //
 // Rendering is delegated to Renderer; the library never sees a graphics API.
 //
@@ -23,6 +23,7 @@
 #include "math.hpp"
 #include "skyrim/bsa_archive.hpp"
 #include "skyrim/cell_system.hpp"
+#include "skyrim/collision.hpp"
 #include "skyrim/form_database.hpp"
 #include "skyrim/mesh.hpp"
 #include "skyrim/skyrim_module.hpp"
@@ -69,7 +70,7 @@ private:
         bool blend = false;     // drawn in the back-to-front transparent pass
         Vec3 center;            // world-space bounding-sphere centre
         float radius = 0.0f;    // bounding-sphere radius
-        Aabb bounds;            // world-space AABB (also used for collision)
+        Aabb bounds;            // world-space AABB, for frustum culling
     };
 
     // Player, in world units (1 unit ~ 1.43 cm; the player is ~128 units tall).
@@ -102,7 +103,21 @@ private:
     void reportContent() const;
 
     void updatePlayer(float dt);
-    void updateColliders();
+
+    // Builds the BVH of every collision cell that has new geometry in it, drops
+    // the ones that have streamed out of range, and reports what it cost. Called
+    // once per stream rebuild: a cell is built when it is first seen and then
+    // kept, so walking back and forth across a cell builds nothing.
+    void buildCollision();
+
+    // Pushes the player's capsule out of the streamed geometry. Returns the
+    // number of contacts resolved.
+    int resolvePlayerCollision(Vec3f& feet) const;
+
+    // The highest streamed surface at or below fromZ under (x, y), searching the
+    // cells around that point. False when there is nothing but terrain there.
+    bool groundHeightNear(float x, float y, float fromZ, float& outZ) const;
+
     Vec3 cameraEye() const;
     Vec3 cameraForward() const;
 
@@ -139,7 +154,13 @@ private:
     std::vector<DrawItem> m_draw;
     std::vector<DrawItem*> m_opaque;    // per-frame draw lists, frustum culled
     std::vector<DrawItem*> m_blended;
-    std::vector<Aabb> m_colliders;
+    // Collision triangles per streamed cell, keyed by grid coordinate. A cell's
+    // geometry depends only on the models placed in it, so it survives a stream
+    // rebuild and is only built the first time the player walks into it. The far
+    // ring and the terrain are absent on purpose: the ring spans kilometres and
+    // the terrain has its own heightmap, which is a better floor than its
+    // triangles would be.
+    std::unordered_map<uint64_t, CollisionCell> m_collision;
     float m_floorZ = 0.0f;
     double m_frameMs = 0.0;             // accumulated render time (diagnostics)
     size_t m_frameCount = 0;

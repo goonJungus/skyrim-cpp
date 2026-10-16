@@ -17,9 +17,9 @@ still to come.
 
 <!-- progress:start -->
 ```
-████████░░░░░░░░░░░░  38%
+████████░░░░░░░░░░░░  42%
 ```
-**14 done, 1 in progress, 18 to go** across 33 milestones, weighted by effort (see [ROADMAP.md](ROADMAP.md)).
+**15 done, 1 in progress, 17 to go** across 33 milestones, weighted by effort (see [ROADMAP.md](ROADMAP.md)).
 <!-- progress:end -->
 
 The data layer and the world are in place, and there is a walkable slice of
@@ -60,8 +60,15 @@ and quests.
   ground stays as bright as its own albedo and the vertex colour baked into the
   meshes — their shading and ambient occlusion — survives instead of clipping.
 - A first-person controller with gravity, jumping and step-up, plus a free-fly
-  mode for looking around. You stand on the terrain heightmap and collide with
-  the placed geometry as it streams in.
+  mode for looking around.
+- Collision against the real geometry: the triangles of the streamed models, not
+  a box around each of them, so you stop at a wall's face and stand on a rock or
+  a roof rather than a building's width away from it. Each cell keeps its own
+  triangle index, built the first time you walk into it and reused after that.
+  Leaves and other alpha-blended surfaces are drawn over the world rather than
+  walked into, and props too small to notice are left out by size.
+- Terrain is the floor out in the open, and a cliff is a wall: a slope too steep
+  to climb slides you along it instead of carrying you through the rock.
 - English string tables (`.STRINGS`) resolve the game's names.
 
 **Launcher**

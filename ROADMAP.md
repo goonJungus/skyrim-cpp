@@ -30,7 +30,7 @@ changing anything here, run `python scripts/progress.py` to refresh the README.
 - [x] Direct3D 9 renderer: lit, textured, alpha cutout (w 2)
 - [x] Daylight: sun, sky fill, post-lighting exposure and fog out to the far terrain (w 2)
 - [x] First-person controller: gravity, collision, walk and fly (w 2)
-- [ ] Collision from real geometry (triangles, not bounding boxes) (w 3)
+- [x] Collision from real geometry (triangles, not bounding boxes) (w 3)
 - [ ] Third-person camera (w 1)
 - [ ] HUD, menus and settings (w 2)
 
